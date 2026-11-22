@@ -18,10 +18,15 @@
 #include "../shared/WinRingsConfig.h"
 #include "../shared/WinRingsIdentity.h"
 #include "AppIndex.h"
+#include "FullWorkAreaCtrl.h"
+#include "GestureEngine.h"
 #include "InputEngine.h"
+#include "MediaIsland.h"
 #include "RingOverlay.h"
 #include "SlotModel.h"
+#include "TopBarHook.h"
 #include "WindowTracker.h"
+#include "XamlTaskbarCtrl.h"
 
 namespace winrings
 {
@@ -84,6 +89,8 @@ namespace winrings
     {
         constexpr UINT_PTR kWatchdogTimerId = 1;
         constexpr UINT kWatchdogIntervalMs = 1000;
+        constexpr UINT_PTR kTopBarRetryTimerId = 2;
+        constexpr UINT kMsgXamlFirstAttached = WM_APP + 300;
         constexpr wchar_t kPreviewControlClassW[] = L"WinRings.Preview.Control.v1";
 
         bool IsCurrentProcessExplorer() noexcept
@@ -213,7 +220,7 @@ namespace winrings
                     DispatchMessageW(&msg);
                 }
 
-                Disarm(false);
+                Disarm(false, false);
                 if (m_controlHwnd && IsWindow(m_controlHwnd))
                 {
                     DestroyWindow(m_controlHwnd);
@@ -248,7 +255,11 @@ namespace winrings
                 if (msg == m_shellHookMessage)
                 {
                     if (m_armed)
+                    {
                         m_tracker.OnShellHookMessage(wp, lp);
+                        if (!m_previewMode && (wp == HSHELL_WINDOWACTIVATED || wp == HSHELL_RUDEAPPACTIVATED))
+                            m_mediaIsland.OnForegroundChanged();
+                    }
                     return 0;
                 }
 
@@ -262,7 +273,7 @@ namespace winrings
                         return TRUE;
 
                     case WINRINGS_CMD_EXIT:
-                        Disarm(true);
+                        Disarm(true, true);
                         return TRUE;
 
                     case WINRINGS_CMD_SUSPEND_INPUT:
@@ -280,8 +291,16 @@ namespace winrings
                         ReloadConfiguration();
                         return TRUE;
 
+                    case WINRINGS_CMD_TOGGLE_TOPBAR:
+                        ToggleTopBar();
+                        return TRUE;
+
+                    case WINRINGS_CMD_TOGGLE_MEDIA_ISLAND:
+                        ToggleMediaIsland();
+                        return TRUE;
+
                     case WINRINGS_CMD_QUERY_SHELL_STATE:
-                        return static_cast<LRESULT>(m_armed ? WINRINGS_STATE_RING_READY : 0u);
+                        return static_cast<LRESULT>(QueryShellStateBits());
 
                     case WINRINGS_CMD_REATTACH:
                         HandleReattach(reinterpret_cast<HWND>(lp));
@@ -292,8 +311,9 @@ namespace winrings
                     }
                 }
 
-                if (msg == WM_TIMER)
+                switch (msg)
                 {
+                case WM_TIMER:
                     if (wp == 9001)
                     {
                         if (m_armed)
@@ -305,6 +325,43 @@ namespace winrings
                         CheckHostWatchdog();
                         return 0;
                     }
+                    if (wp == kTopBarRetryTimerId && !m_previewMode)
+                    {
+                        ApplyTopBarState(false);
+                        if (XamlTaskbarCtrl::IsAttached() &&
+                            (!TopBarHook::IsHooked() || m_topBarHookAppliedGen == m_topBarDesiredGen))
+                        {
+                            KillTimer(hwnd, kTopBarRetryTimerId);
+                        }
+                        return 0;
+                    }
+                    break;
+
+                case kMsgXamlFirstAttached:
+                    if (m_armed && !m_previewMode)
+                    {
+                        ShellDiagLog(L"ShellCtrl", L"Received kMsgXamlFirstAttached -> forcing TopBar sync");
+                        ApplyTopBarState(true);
+                    }
+                    return 0;
+
+                case WM_INPUT:
+                    if (m_armed && !m_previewMode)
+                        m_gestures.OnRawInput(lp);
+                    return DefWindowProcW(hwnd, msg, wp, lp);
+
+                case WM_DISPLAYCHANGE:
+                case WM_SETTINGCHANGE:
+                    if (m_armed && !m_previewMode)
+                    {
+                        if (m_config.topBarEnabled)
+                            ApplyTopBarState(true);
+                        m_mediaIsland.RefreshLayoutAndVisibility();
+                    }
+                    return 0;
+
+                default:
+                    break;
                 }
                 return DefWindowProcW(hwnd, msg, wp, lp);
             }
@@ -365,7 +422,7 @@ namespace winrings
                     hostGone = true;
 
                 if (hostGone)
-                    Disarm(false);
+                    Disarm(true, false);
             }
 
             void Arm(bool forPreview)
@@ -384,6 +441,12 @@ namespace winrings
                     updated.Save();
                     m_config = updated;
                     ApplyLoadedConfig();
+                };
+                overlayCb.onToggleTopBarRequested = [this]() {
+                    ToggleTopBar();
+                };
+                overlayCb.onToggleMediaIslandRequested = [this]() {
+                    ToggleMediaIsland();
                 };
                 overlayCb.onExitRequested = [this]() {
                     if (m_previewMode)
@@ -481,6 +544,44 @@ namespace winrings
                 };
                 inputCb.onUserPointerDelta = [this]() {
                 };
+                inputCb.onDirectSwitchStep = [this]() {
+                    if (m_directSwitchList.empty())
+                    {
+                        m_tracker.SetMruFrozen(true);
+                        m_directSwitchList = m_tracker.GetEligibleMruWindows(m_overlay.Hwnd());
+                        if (m_directSwitchList.empty())
+                        {
+                            m_tracker.SetMruFrozen(false);
+                            return;
+                        }
+                        m_directSwitchIndex = (m_directSwitchList.size() > 1) ? 1u : 0u;
+                    }
+                    else
+                    {
+                        m_directSwitchIndex = (m_directSwitchIndex + 1u) % m_directSwitchList.size();
+                    }
+                    m_tracker.ActivateWindowDirect(m_directSwitchList[m_directSwitchIndex], false);
+                };
+                inputCb.onDirectSwitchCommit = [this]() {
+                    m_tracker.SetMruFrozen(false);
+                    if (!m_directSwitchList.empty() && m_directSwitchIndex < m_directSwitchList.size())
+                    {
+                        if (m_directSwitchList.size() > 1 && m_directSwitchIndex != 0)
+                            m_tracker.OnWinEventForeground(m_directSwitchList[0]);
+                        m_tracker.OnWinEventForeground(m_directSwitchList[m_directSwitchIndex]);
+                    }
+                    m_directSwitchList.clear();
+                    m_directSwitchIndex = 0;
+                };
+                inputCb.shouldSuppressTouchpadMouse = [this](UINT mouseMsg) {
+                    return !m_previewMode && m_gestures.ShouldSuppressMouseButton(mouseMsg);
+                };
+                inputCb.onMediaIslandWheel = [this](POINT pt, short delta) {
+                    if (m_previewMode || !m_mediaIsland.HitTestScreenPoint(pt))
+                        return false;
+                    m_mediaIsland.PostExternalWheel(delta);
+                    return true;
+                };
 
                 m_input.Install(m_config, std::move(inputCb));
                 m_input.SetSuspended(false);
@@ -488,13 +589,85 @@ namespace winrings
 
                 if (!forPreview)
                 {
-                    ShellDiagLog(L"ShellCtrl", L"Arm: Radial Switcher ready (theme=%s glass=%d tone=%d)",
-                        ToString(m_config.theme), m_config.glassLevel, m_config.lightDarkMode);
+                    m_fullWorkArea.Initialize(m_shellModule, m_config, [this]() {
+                        m_mediaIsland.OnTaskbarVisibilityChanged(m_fullWorkArea.IsTaskbarHidden());
+                    });
+                    MediaIsland::Callbacks mediaCb{};
+                    mediaCb.getSystemTrayWidthDip = []() {
+                        return XamlTaskbarCtrl::GetSystemTrayWidthDip();
+                    };
+                    mediaCb.onSaveOffsetXPct = [this](int pct) {
+                        m_config.mediaIslandOffsetXPct = pct;
+                        m_config.Save();
+                        m_mediaIsland.UpdateConfig(m_config);
+                    };
+                    mediaCb.onToggleEnabled = [this]() {
+                        ToggleMediaIsland();
+                    };
+                    mediaCb.onOpenSettings = [this]() {
+                        LaunchToolsExecutable(m_shellModule, L"--settings");
+                    };
+                    m_mediaIsland.Initialize(m_shellModule, m_config, std::move(mediaCb));
+                    m_mediaIsland.OnTaskbarVisibilityChanged(m_fullWorkArea.IsTaskbarHidden());
+                    XamlTaskbarCtrl::SetTrayMetricsCallback([this]() {
+                        if (!m_previewMode)
+                            m_mediaIsland.NotifyLayoutRefresh();
+                    });
+
+                    m_gestures.Initialize(m_controlHwnd, m_config, {
+                        [this]() { return m_overlay.IsOpen(); },
+                        [this]() { ToggleStickyRing(); },
+                        [this]() {
+                            if (!m_overlay.IsOpen())
+                            {
+                                POINT pt{};
+                                GetCursorPos(&pt);
+                                OpenRingAt(pt.x, pt.y, true);
+                            }
+                        },
+                        [this](POINT pt) {
+                            HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+                            if (HMODULE shcore = GetModuleHandleW(L"shcore.dll"))
+                            {
+                                using GetDpiForMonFn = HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*);
+                                if (auto fn = reinterpret_cast<GetDpiForMonFn>(GetProcAddress(shcore, "GetDpiForMonitor")))
+                                {
+                                    UINT dx = 96, dy = 96;
+                                    if (SUCCEEDED(fn(mon, 0, &dx, &dy)) && dx >= 72)
+                                        return static_cast<double>(dx) / 96.0;
+                                }
+                            }
+                            return m_overlay.DpiScale();
+                        }
+                    });
+
+                    const bool hookOk = m_config.topBarEnabled ? TopBarHook::Install() : false;
+                    ShellDiagLog(L"ShellCtrl",
+                        L"Arm: Radial Switcher ready (theme=%s glass=%d tone=%d topBarEnabled=%d dockTop=%d heightDip=%d hideApps=%d hookInstall=%d)",
+                        ToString(m_config.theme), m_config.glassLevel, m_config.lightDarkMode,
+                        m_config.topBarEnabled ? 1 : 0, m_config.topBarDockTop ? 1 : 0,
+                        m_config.topBarHeightDip, m_config.topBarHideAppButtons ? 1 : 0,
+                        hookOk ? 1 : 0);
+                    ShellDiagLog(L"ShellCtrl",
+                        L"Custom modules armed: FullWorkArea=%d MediaIsland=%d WinKey=%d DirectSwitch=%d TpClick=%d Shake=%d HotCorner=%d",
+                        m_config.fullWorkAreaEnabled ? 1 : 0, m_config.mediaIslandEnabled ? 1 : 0,
+                        m_config.winKeyTrigger ? 1 : 0, m_config.directSwitchEnabled ? 1 : 0,
+                        m_config.touchpadPhysLeftClickTrigger ? 1 : 0, m_config.shakeTriggerEnabled ? 1 : 0,
+                        m_config.hotCornerEnabled ? 1 : 0);
+
+                    HWND ctrlHwnd = m_controlHwnd;
+                    XamlTaskbarCtrl::StartAttachment(m_shellModule, m_config, [ctrlHwnd]() {
+                        if (ctrlHwnd && IsWindow(ctrlHwnd))
+                            PostMessageW(ctrlHwnd, kMsgXamlFirstAttached, 0, 0);
+                    });
+                    ++m_topBarDesiredGen;
+                    SetTimer(m_controlHwnd, kTopBarRetryTimerId, 1000, nullptr);
+                    ApplyTopBarState(true);
                     PostStatusToHost(WINRINGS_DLL_STATUS_READY);
                 }
             }
 
-            void Disarm(bool notifyHost)
+            void Disarm(bool restoreTopBar, bool notifyHost)
             {
                 if (!m_armed)
                 {
@@ -503,15 +676,41 @@ namespace winrings
                     return;
                 }
 
-                ShellDiagLog(L"ShellCtrl", L"Disarm(notifyHost=%d)", notifyHost ? 1 : 0);
+                ShellDiagLog(L"ShellCtrl", L"Disarm(restoreTopBar=%d notifyHost=%d)",
+                    restoreTopBar ? 1 : 0, notifyHost ? 1 : 0);
+
+                XamlTaskbarCtrl::SetTrayMetricsCallback(nullptr);
+                if (m_controlHwnd && !m_previewMode)
+                    KillTimer(m_controlHwnd, kTopBarRetryTimerId);
 
                 m_armed = false;
+                m_topBarHookAppliedGen = 0;
+                m_tracker.SetMruFrozen(false);
+                m_directSwitchList.clear();
+                m_directSwitchIndex = 0;
                 m_input.Uninstall();
+                if (!m_previewMode)
+                {
+                    m_gestures.Shutdown();
+                    m_mediaIsland.Shutdown();
+                    m_fullWorkArea.Shutdown();
+                }
                 if (m_overlay.IsOpen())
                     m_overlay.Dismiss();
                 m_overlay.Shutdown();
                 m_appIndex.Shutdown();
                 m_tracker.Shutdown();
+
+                if (restoreTopBar && !m_previewMode)
+                {
+                    XamlTaskbarCtrl::RestoreAll();
+                    HMODULE shellMod = m_shellModule;
+                    TopBarHook::RestoreAndUnhook([shellMod](std::function<void()> fn) {
+                        if (XamlTaskbarCtrl::RunOnUiThread(fn, 1500))
+                            return true;
+                        return TopBarHook::RunOnPrimaryTaskbarThread(shellMod, std::move(fn), 1500);
+                    });
+                }
 
                 if (notifyHost && !m_previewMode)
                     PostStatusToHost(WINRINGS_DLL_STATUS_DISARMED);
@@ -519,7 +718,7 @@ namespace winrings
 
             void HandleReattach(HWND newHostWindow)
             {
-                Disarm(false);
+                Disarm(true, false);
                 AcquireHostHandshake(newHostWindow);
                 Arm(false);
             }
@@ -553,8 +752,36 @@ namespace winrings
                 if (!m_armed)
                     return;
                 m_config = SwitcherConfig::LoadOrCreate();
-                ShellDiagLog(L"ShellCtrl", L"ReloadConfiguration: theme=%s glass=%d tone=%d",
-                    ToString(m_config.theme), m_config.glassLevel, m_config.lightDarkMode);
+                ShellDiagLog(L"ShellCtrl",
+                    L"ReloadConfiguration: theme=%s glass=%d tone=%d topBarEnabled=%d dockTop=%d heightDip=%d media=%d",
+                    ToString(m_config.theme), m_config.glassLevel, m_config.lightDarkMode,
+                    m_config.topBarEnabled ? 1 : 0, m_config.topBarDockTop ? 1 : 0,
+                    m_config.topBarHeightDip, m_config.mediaIslandEnabled ? 1 : 0);
+                ApplyLoadedConfig();
+            }
+
+            void ToggleTopBar()
+            {
+                if (!m_armed)
+                    return;
+                const bool prev = m_config.topBarEnabled;
+                m_config.topBarEnabled = !m_config.topBarEnabled;
+                const bool saved = m_config.Save();
+                ShellDiagLog(L"ShellCtrl", L"ToggleTopBar: %d -> %d (saved=%d xamlAttached=%d hooked=%d)",
+                    prev ? 1 : 0, m_config.topBarEnabled ? 1 : 0, saved ? 1 : 0,
+                    XamlTaskbarCtrl::IsAttached() ? 1 : 0, TopBarHook::IsHooked() ? 1 : 0);
+                ApplyLoadedConfig();
+            }
+
+            void ToggleMediaIsland()
+            {
+                if (!m_armed)
+                    return;
+                const bool prev = m_config.mediaIslandEnabled;
+                m_config.mediaIslandEnabled = !m_config.mediaIslandEnabled;
+                const bool saved = m_config.Save();
+                ShellDiagLog(L"ShellCtrl", L"ToggleMediaIsland: %d -> %d (saved=%d)",
+                    prev ? 1 : 0, m_config.mediaIslandEnabled ? 1 : 0, saved ? 1 : 0);
                 ApplyLoadedConfig();
             }
 
@@ -562,6 +789,83 @@ namespace winrings
             {
                 m_overlay.SetConfig(m_config);
                 m_input.UpdateConfig(m_config);
+                if (!m_previewMode)
+                {
+                    m_gestures.UpdateConfig(m_config);
+                    m_fullWorkArea.UpdateConfig(m_config);
+                    m_mediaIsland.UpdateConfig(m_config);
+                    ++m_topBarDesiredGen;
+                    if (m_config.topBarEnabled && !TopBarHook::IsHooked())
+                        TopBarHook::Install();
+                    ApplyTopBarState(true);
+                }
+            }
+
+            void ApplyTopBarState(bool forceHookReapply)
+            {
+                if (m_previewMode)
+                    return;
+
+                XamlTaskbarCtrl::ApplyConfig(m_config);
+                if (!XamlTaskbarCtrl::IsAttached())
+                    XamlTaskbarCtrl::EnsureAttachRetry(m_shellModule, m_config);
+
+                if (m_config.topBarEnabled && !TopBarHook::IsHooked())
+                    TopBarHook::Install();
+
+                if (TopBarHook::IsHooked() && (forceHookReapply || m_topBarHookAppliedGen != m_topBarDesiredGen))
+                {
+                    const bool en = m_config.topBarEnabled;
+                    const bool top = m_config.topBarDockTop;
+                    const int h = m_config.topBarHeightDip;
+                    const bool allMon = m_config.topBarAllMonitors;
+                    auto applied = std::make_shared<std::atomic<bool>>(false);
+                    auto applyFn = [en, top, h, allMon, applied]() {
+                        if (TopBarHook::ApplyOnTaskbarUiThread(en, top, h, allMon))
+                            applied->store(true, std::memory_order_release);
+                    };
+
+                    const wchar_t* dispatchVia = L"Failed";
+                    bool dispatched = false;
+                    if (XamlTaskbarCtrl::RunOnUiThread(applyFn, 1500))
+                    {
+                        dispatched = true;
+                        dispatchVia = L"XamlUiThread";
+                    }
+                    else if (TopBarHook::RunOnPrimaryTaskbarThread(m_shellModule, applyFn, 1500))
+                    {
+                        dispatched = true;
+                        dispatchVia = L"TrayThreadFallback";
+                    }
+
+                    const bool appliedOk = dispatched && applied->load(std::memory_order_acquire);
+                    ShellDiagLog(L"ShellCtrl",
+                        L"ApplyTopBarState: en=%d top=%d h=%d xamlAttached=%d dispatch=%s applied=%d",
+                        en ? 1 : 0, top ? 1 : 0, h, XamlTaskbarCtrl::IsAttached() ? 1 : 0, dispatchVia,
+                        appliedOk ? 1 : 0);
+
+                    if (appliedOk)
+                        m_topBarHookAppliedGen = m_topBarDesiredGen;
+                }
+
+                if (!XamlTaskbarCtrl::IsAttached() ||
+                    (TopBarHook::IsHooked() && m_topBarHookAppliedGen != m_topBarDesiredGen))
+                {
+                    SetTimer(m_controlHwnd, kTopBarRetryTimerId, 1000, nullptr);
+                }
+            }
+
+            UINT32 QueryShellStateBits() const noexcept
+            {
+                UINT32 bits = 0;
+                if (m_armed)
+                    bits |= WINRINGS_STATE_RING_READY;
+                bits |= XamlTaskbarCtrl::GetStateBits();
+                if (TopBarHook::IsHooked())
+                    bits |= WINRINGS_STATE_TOPBAR_HOOKED;
+                if (m_mediaIsland.IsActiveVisible())
+                    bits |= WINRINGS_STATE_MEDIA_ISLAND_ACTIVE;
+                return bits;
             }
 
             HMODULE m_shellModule = nullptr;
@@ -576,12 +880,19 @@ namespace winrings
             UINT m_statusMessage = 0;
             UINT m_commandMessage = 0;
             UINT m_shellHookMessage = 0;
+            uint64_t m_topBarDesiredGen = 0;
+            uint64_t m_topBarHookAppliedGen = 0;
 
             SwitcherConfig m_config;
             AppIndex m_appIndex;
             WindowTracker m_tracker;
             RingOverlay m_overlay;
             InputEngine m_input;
+            FullWorkAreaCtrl m_fullWorkArea;
+            GestureEngine m_gestures;
+            MediaIsland m_mediaIsland;
+            std::vector<HWND> m_directSwitchList;
+            size_t m_directSwitchIndex = 0;
         };
 
         std::atomic<bool> g_explorerStarted{ false };

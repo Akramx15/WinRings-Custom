@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "ClockFormat.h"
+
 namespace winrings
 {
     enum class MouseTriggerButton
@@ -35,6 +37,13 @@ namespace winrings
         Blue       // "Blue" (re-added classic #3186FF glass look)
     };
 
+    enum class TopBarBackdrop
+    {
+        Clear,
+        Frosted,
+        Native
+    };
+
     enum class SlotKind
     {
         App,
@@ -44,6 +53,45 @@ namespace winrings
         Script,
         Collection,
         RecycleBin
+    };
+
+    enum class SelectionIndicatorStyle
+    {
+        GlowOnly,
+        SectorWedge,
+        PointerLine
+    };
+
+    enum class HotCornerPos
+    {
+        TopLeft,
+        TopRight
+    };
+
+    enum class HotCornerAction
+    {
+        TaskView,
+        OpenRing
+    };
+
+    enum class TouchpadCornerPos
+    {
+        TopLeft,
+        TopRight
+    };
+
+    enum class MediaIslandPos
+    {
+        Center,
+        Left,
+        NearTray
+    };
+
+    enum class MediaIslandFullscreenMode
+    {
+        SyncWithTaskbar,
+        GamesOnly,
+        NeverHide
     };
 
     struct PinnedSlotConfig
@@ -91,6 +139,66 @@ namespace winrings
         bool includeUnpinnedRunningApps = true;
         int maxSlots = 14;
 
+        // Unified Minimal Top Bar
+        bool topBarEnabled = true;
+        bool topBarDockTop = true;
+        int topBarHeightDip = 30;
+        bool topBarPreserveFontSize = true;
+        bool topBarClockSingleLine = true;
+        std::wstring topBarClockFormat = L"ddd d MMM  h:mm tt";
+        ClockCasing topBarClockCasing = ClockCasing::CompactLower;
+        bool topBarHideAppButtons = true;
+        bool topBarHideStart = true;
+        bool topBarHideSearch = true;
+        bool topBarHideTaskView = true;
+        bool topBarHideWidgets = true;
+        TopBarBackdrop topBarBackdrop = TopBarBackdrop::Clear;
+        bool topBarAllMonitors = true;
+
+        // Appearance / Fast mode & Selection Indicator
+        bool disableRingBlur = false;
+        SelectionIndicatorStyle selectionIndicator = SelectionIndicatorStyle::SectorWedge;
+
+        // Win Key & GNOME Direct Window Switch
+        bool winKeyTrigger = true;
+        bool directSwitchEnabled = true;
+        UINT directSwitchModifiers = MOD_ALT;
+        UINT directSwitchVk = 'F';
+
+        // Touchpad Raw Input Triggers
+        bool touchpadPhysLeftClickTrigger = true;
+        bool touchpadCornerTrigger = false;
+        TouchpadCornerPos touchpadCornerPos = TouchpadCornerPos::TopRight;
+        int touchpadCornerSizePct = 18;
+
+        // Mouse Shake Trigger (Aluminium OS / Magic Pointer)
+        bool shakeTriggerEnabled = true;
+        int shakeMinReversals = 4;
+        int shakeWindowMs = 400;
+        int shakeMinAmplitudeDip = 32;
+        bool shakeSuppressFullscreen = true;
+
+        // GNOME Pressure Hot Corner
+        bool hotCornerEnabled = true;
+        HotCornerPos hotCornerPos = HotCornerPos::TopLeft;
+        HotCornerAction hotCornerAction = HotCornerAction::TaskView;
+        int hotCornerPressureThreshold = 140;
+
+        // Integrated FullWorkArea (Windows 11 26H2+)
+        bool fullWorkAreaEnabled = true;
+        bool fullWorkAreaPillClip = true;
+        bool fullWorkAreaHotkeys = true;
+
+        // Dynamic Island Media Pill
+        bool mediaIslandEnabled = true;
+        MediaIslandPos mediaIslandPos = MediaIslandPos::Left;
+        bool mediaIslandHoverExpand = false;
+        bool mediaIslandHideWhenPaused = false;
+        bool mediaIslandScrollVolume = true;
+        bool mediaIslandMarquee = true;
+        MediaIslandFullscreenMode mediaIslandFullscreenMode = MediaIslandFullscreenMode::SyncWithTaskbar;
+        int mediaIslandOffsetXPct = -1;
+
         std::vector<PinnedSlotConfig> pinnedSlots;
 
         static std::wstring AppDataDirectory();
@@ -111,5 +219,13 @@ namespace winrings
     const wchar_t* ToString(ScrollWheelBehavior v) noexcept;
     const wchar_t* ToString(WindowViewMode v) noexcept;
     const wchar_t* ToString(RingTheme v) noexcept;
+    const wchar_t* ToString(TopBarBackdrop v) noexcept;
+    const wchar_t* ToString(ClockCasing v) noexcept;
     const wchar_t* ToString(SlotKind v) noexcept;
+    const wchar_t* ToString(SelectionIndicatorStyle v) noexcept;
+    const wchar_t* ToString(HotCornerPos v) noexcept;
+    const wchar_t* ToString(HotCornerAction v) noexcept;
+    const wchar_t* ToString(TouchpadCornerPos v) noexcept;
+    const wchar_t* ToString(MediaIslandPos v) noexcept;
+    const wchar_t* ToString(MediaIslandFullscreenMode v) noexcept;
 } // namespace winrings

@@ -5,6 +5,11 @@
 
 namespace winrings
 {
+    namespace
+    {
+        constexpr ULONG_PTR kWinRingsInjectedTag = 0x57524E47ull;
+    }
+
     InputEngine* InputEngine::s_instance = nullptr;
 
     InputEngine::~InputEngine()
@@ -68,6 +73,14 @@ namespace winrings
         m_chordActive = false;
         m_outsideClickPending = false;
         m_outsideClickOrigin = {};
+        m_winKeyDown = false;
+        m_winComboUsed = false;
+        if (m_directSwitchActive)
+        {
+            m_directSwitchActive = false;
+            if (m_callbacks.onDirectSwitchCommit)
+                m_callbacks.onDirectSwitchCommit();
+        }
         m_lastTapQpc = 0;
     }
 
@@ -130,6 +143,68 @@ namespace winrings
         return false;
     }
 
+    bool InputEngine::IsDirectSwitchMatch(DWORD vkCode) const noexcept
+    {
+        if (!m_config.directSwitchEnabled || vkCode != m_config.directSwitchVk)
+            return false;
+
+        const bool wantAlt = (m_config.directSwitchModifiers & MOD_ALT) != 0;
+        const bool wantCtrl = (m_config.directSwitchModifiers & MOD_CONTROL) != 0;
+        const bool wantShift = (m_config.directSwitchModifiers & MOD_SHIFT) != 0;
+        const bool wantWin = (m_config.directSwitchModifiers & MOD_WIN) != 0;
+
+        const bool hasAlt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+        const bool hasCtrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+        const bool hasShift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+        const bool hasWin = ((GetAsyncKeyState(VK_LWIN) & 0x8000) != 0) ||
+            ((GetAsyncKeyState(VK_RWIN) & 0x8000) != 0);
+
+        return wantAlt == hasAlt && wantCtrl == hasCtrl &&
+            wantShift == hasShift && wantWin == hasWin;
+    }
+
+    bool InputEngine::IsDirectSwitchModifierVk(DWORD vkCode) const noexcept
+    {
+        if ((m_config.directSwitchModifiers & MOD_ALT) &&
+            (vkCode == VK_MENU || vkCode == VK_LMENU || vkCode == VK_RMENU))
+            return true;
+        if ((m_config.directSwitchModifiers & MOD_CONTROL) &&
+            (vkCode == VK_CONTROL || vkCode == VK_LCONTROL || vkCode == VK_RCONTROL))
+            return true;
+        if ((m_config.directSwitchModifiers & MOD_SHIFT) &&
+            (vkCode == VK_SHIFT || vkCode == VK_LSHIFT || vkCode == VK_RSHIFT))
+            return true;
+        if ((m_config.directSwitchModifiers & MOD_WIN) &&
+            (vkCode == VK_LWIN || vkCode == VK_RWIN))
+            return true;
+        return false;
+    }
+
+    void InputEngine::SendDummyMaskKey(bool includeLWinUp) noexcept
+    {
+        INPUT inputs[3]{};
+        UINT count = 2;
+
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].ki.wVk = VK_NONAME;
+        inputs[0].ki.dwExtraInfo = kWinRingsInjectedTag;
+
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].ki.wVk = VK_NONAME;
+        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[1].ki.dwExtraInfo = kWinRingsInjectedTag;
+
+        if (includeLWinUp)
+        {
+            inputs[2].type = INPUT_KEYBOARD;
+            inputs[2].ki.wVk = VK_LWIN;
+            inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
+            inputs[2].ki.dwExtraInfo = kWinRingsInjectedTag;
+            count = 3;
+        }
+        SendInput(count, inputs, sizeof(INPUT));
+    }
+
     LRESULT InputEngine::HandleKeyboard(int code, WPARAM wp, LPARAM lp)
     {
         if (m_suspended)
@@ -139,12 +214,65 @@ namespace winrings
         if (!kb)
             return CallNextHookEx(m_keyboardHook, code, wp, lp);
 
+        const bool injected = (kb->flags & LLKHF_INJECTED) != 0;
+        if (injected && kb->dwExtraInfo == kWinRingsInjectedTag)
+            return CallNextHookEx(m_keyboardHook, code, wp, lp);
+
         const bool isDown = (wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN);
         const bool isUp = (wp == WM_KEYUP || wp == WM_SYSKEYUP);
         const bool ringOpen = m_callbacks.isRingOpen && m_callbacks.isRingOpen();
 
+        if (!injected)
+        {
+            if (isDown)
+            {
+                if (kb->vkCode == VK_LWIN)
+                {
+                    if (!m_winKeyDown)
+                    {
+                        m_winKeyDown = true;
+                        m_winComboUsed = false;
+                    }
+                }
+                else if (m_winKeyDown)
+                {
+                    m_winComboUsed = true;
+                }
+            }
+            else if (isUp && kb->vkCode == VK_LWIN && m_winKeyDown)
+            {
+                const bool soloTap = !m_winComboUsed && m_config.winKeyTrigger && !m_directSwitchActive;
+                m_winKeyDown = false;
+                m_winComboUsed = false;
+                if (soloTap)
+                {
+                    SendDummyMaskKey(true);
+                    if (m_callbacks.onToggleRequested)
+                        m_callbacks.onToggleRequested();
+                    return 1;
+                }
+            }
+        }
+
         if (isDown)
         {
+            // Priority #1: Direct Window Switch (no popup, fully swallows key so target app receives nothing)
+            if (IsDirectSwitchMatch(kb->vkCode))
+            {
+                if (ringOpen && m_callbacks.onCancelRequested)
+                    m_callbacks.onCancelRequested();
+                if (!m_directSwitchActive)
+                {
+                    m_directSwitchActive = true;
+                    if (m_winKeyDown)
+                        m_winComboUsed = true;
+                    SendDummyMaskKey(false);
+                }
+                if (m_callbacks.onDirectSwitchStep)
+                    m_callbacks.onDirectSwitchStep();
+                return 1;
+            }
+
             if (ringOpen && kb->vkCode == VK_ESCAPE)
             {
                 m_triggerHeld = false;
@@ -240,6 +368,18 @@ namespace winrings
         }
         else if (isUp)
         {
+            if (m_directSwitchActive)
+            {
+                if (kb->vkCode == m_config.directSwitchVk)
+                    return 1;
+                if (IsDirectSwitchModifierVk(kb->vkCode))
+                {
+                    m_directSwitchActive = false;
+                    if (m_callbacks.onDirectSwitchCommit)
+                        m_callbacks.onDirectSwitchCommit();
+                }
+            }
+
             if (m_config.menuKeyEnabled && kb->vkCode == VK_APPS)
                 return 1;
 
@@ -287,7 +427,21 @@ namespace winrings
             return CallNextHookEx(m_mouseHook, code, wp, lp);
 
         const UINT msg = static_cast<UINT>(wp);
+        const bool injectedMouse = (ms->flags & LLMHF_INJECTED) != 0;
         const bool ringOpen = m_callbacks.isRingOpen && m_callbacks.isRingOpen();
+
+        if (!injectedMouse && (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) &&
+            m_callbacks.shouldSuppressTouchpadMouse && m_callbacks.shouldSuppressTouchpadMouse(msg))
+        {
+            return 1;
+        }
+
+        if (!injectedMouse && m_winKeyDown &&
+            (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN ||
+             msg == WM_XBUTTONDOWN || msg == WM_MOUSEWHEEL))
+        {
+            m_winComboUsed = true;
+        }
 
         if (msg == WM_MOUSEMOVE)
         {
@@ -310,15 +464,22 @@ namespace winrings
             return CallNextHookEx(m_mouseHook, code, wp, lp);
         }
 
-        if (msg == WM_MOUSEWHEEL && ringOpen &&
-            m_config.scrollWheelMode != ScrollWheelBehavior::Disabled)
+        if (msg == WM_MOUSEWHEEL)
         {
             const short delta = static_cast<short>(HIWORD(ms->mouseData));
             if (delta != 0)
             {
-                if (m_callbacks.onMouseWheel)
-                    m_callbacks.onMouseWheel(delta);
-                return 1;
+                if (ringOpen && m_config.scrollWheelMode != ScrollWheelBehavior::Disabled)
+                {
+                    if (m_callbacks.onMouseWheel)
+                        m_callbacks.onMouseWheel(delta);
+                    return 1;
+                }
+                if (!ringOpen && m_callbacks.onMediaIslandWheel &&
+                    m_callbacks.onMediaIslandWheel(ms->pt, delta))
+                {
+                    return 1;
+                }
             }
         }
 

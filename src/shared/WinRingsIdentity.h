@@ -30,9 +30,13 @@
 #define WINRINGS_GET_API_EXPORT_A           "WinRings_GetApi"
 #define WINRINGS_RUN_PREVIEW_EXPORT_A       "WinRings_RunPreview"
 
-#define WINRINGS_PRODUCT_VERSION_MAJOR      1
+#define WINRINGS_PRODUCT_VERSION_MAJOR      3
 #define WINRINGS_PRODUCT_VERSION_MINOR      0
-#define WINRINGS_PRODUCT_VERSION_PATCH      0
+#define WINRINGS_PRODUCT_VERSION_PATCH      1
 #define WINRINGS_PRODUCT_VERSION_BUILD      0
-#define WINRINGS_PRODUCT_VERSION_STR_A      "1.0.0.0"
-#define WINRINGS_PRODUCT_VERSION_STR_W      L"1.0.0.0"
+#define WINRINGS_PRODUCT_VERSION_STR_A      "3.0.1.0"
+#define WINRINGS_PRODUCT_VERSION_STR_W      L"3.0.1.0"
+
+// Private, unregistered COM class for Win11 XAML diagnostics site.
+inline constexpr CLSID WinRingsXamlDiagClass =
+{ 0x9b4f3a12, 0x7e84, 0x4c61, { 0xa5, 0xd2, 0x38, 0xf0, 0xc7, 0x1e, 0x94, 0x2b } };

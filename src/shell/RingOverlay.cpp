@@ -2,6 +2,7 @@
 
 #include <ShellScalingApi.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 #include <uxtheme.h>
 #include <windowsx.h>
 #include <algorithm>
@@ -505,7 +506,18 @@ namespace winrings
 
     void RingOverlay::SetConfig(const SwitcherConfig& config)
     {
+        const bool blurChanged = (m_config.disableRingBlur != config.disableRingBlur);
         m_config = config;
+        if (blurChanged)
+        {
+            if (m_config.disableRingBlur && m_wcaBackdropHwnd && IsWindow(m_wcaBackdropHwnd))
+                ShowWindow(m_wcaBackdropHwnd, SW_HIDE);
+            if (m_hwnd)
+            {
+                ReleaseGraphicsDevices();
+                CreateGraphicsDevices();
+            }
+        }
         if (m_isOpen)
             Render();
     }
@@ -600,8 +612,9 @@ namespace winrings
 
         EnsureNoiseBrush();
 
-        if (m_wcaBackdropActive || !m_acrylicBackdrop.Initialize(m_hwnd, m_swapChain.Get(), m_maskSwapChain.Get(),
-            m_swapWidthPx, m_swapHeightPx))
+        if (m_config.disableRingBlur || m_wcaBackdropActive ||
+            !m_acrylicBackdrop.Initialize(m_hwnd, m_swapChain.Get(), m_maskSwapChain.Get(),
+                m_swapWidthPx, m_swapHeightPx))
         {
             // When native WCA ACCENT_ENABLE_ACRYLICBLURBEHIND is active on m_wcaBackdropHwnd (exact A4S-Menu path),
             // m_hwnd renders crisp antialiased foreground chrome & icons over it via lightweight IDCompositionTarget.
@@ -925,13 +938,18 @@ namespace winrings
         }
 
         Render();
-        if (m_wcaBackdropHwnd && m_wcaBackdropActive)
+        const bool showWca = (m_wcaBackdropHwnd && m_wcaBackdropActive && !m_config.disableRingBlur);
+        if (showWca)
         {
             ShowWindow(m_wcaBackdropHwnd, SW_SHOWNOACTIVATE);
             UpdateWindow(m_wcaBackdropHwnd);
         }
+        else if (m_wcaBackdropHwnd && IsWindow(m_wcaBackdropHwnd))
+        {
+            ShowWindow(m_wcaBackdropHwnd, SW_HIDE);
+        }
         ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
-        if (m_wcaBackdropHwnd && m_wcaBackdropActive)
+        if (showWca)
             SetWindowPos(m_wcaBackdropHwnd, m_hwnd, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
@@ -1000,11 +1018,47 @@ namespace winrings
         m_searchResultSlots.clear();
         m_expandedSlotIndex = -1;
         m_selectedSubIndex = -1;
+        m_hoveredCloseSubIndex = -1;
         m_searchArcActive = false;
         m_submenuHasArcTrack = false;
         m_submenuArcLayout = {};
         m_submenuBoundsDip = {};
         m_submenuIsTitleColumn = false;
+    }
+
+    D2D1_RECT_F RingOverlay::GetSubmenuCloseRectDip(const D2D1_RECT_F& cardRectDip, WindowViewMode mode) const noexcept
+    {
+        constexpr float sz = 16.0f;
+        if (mode == WindowViewMode::TitleColumn)
+        {
+            const float cy = (cardRectDip.top + cardRectDip.bottom) * 0.5f;
+            return D2D1::RectF(cardRectDip.right - 22.0f, cy - sz * 0.5f, cardRectDip.right - 6.0f, cy + sz * 0.5f);
+        }
+        return D2D1::RectF(cardRectDip.right - 20.0f, cardRectDip.bottom - 18.0f, cardRectDip.right - 4.0f, cardRectDip.bottom - 2.0f);
+    }
+
+    int RingOverlay::HitTestSubmenuCloseButton(PointD localDip) const noexcept
+    {
+        if (m_submenuCards.empty())
+            return -1;
+        for (size_t i = 0; i < m_submenuCards.size(); ++i)
+        {
+            const auto& card = m_submenuCards[i];
+            if (!card.window)
+                continue;
+            const float cx = static_cast<float>(card.boundsDip.left + card.boundsDip.width * 0.5);
+            const float cy = static_cast<float>(card.boundsDip.top + card.boundsDip.height * 0.5);
+            const float hw = static_cast<float>(card.boundsDip.width * 0.5 * card.currentScale);
+            const float hh = static_cast<float>(card.boundsDip.height * 0.5 * card.currentScale);
+            const D2D1_RECT_F cardRectDip = D2D1::RectF(cx - hw, cy - hh, cx + hw, cy + hh);
+            const D2D1_RECT_F btn = GetSubmenuCloseRectDip(cardRectDip, m_config.windowViewMode);
+            if (localDip.x >= btn.left - 2.0 && localDip.x <= btn.right + 2.0 &&
+                localDip.y >= btn.top - 2.0 && localDip.y <= btn.bottom + 2.0)
+            {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
     }
 
     void RingOverlay::OpenSubmenuForSlot(int slotIndex, PointD originDip)
@@ -1152,7 +1206,7 @@ namespace winrings
 
         const RingGeometry geom = ActiveGeometry();
         const double outerReach = m_isLockedOpen ? 12.0 : 48.0;
-        const RingHoverResult next = ResolveRingHover(
+        RingHoverResult next = ResolveRingHover(
             localPt,
             centerPt,
             slotCount,
@@ -1166,6 +1220,16 @@ namespace winrings
             m_submenuBoundsDip,
             m_submenuIsTitleColumn,
             outerReach);
+
+        const int earlyCloseHit = (m_expandedSlotIndex >= 0 && !m_searchArcActive && m_filterQuery.empty())
+            ? HitTestSubmenuCloseButton(localPt)
+            : -1;
+        if (earlyCloseHit >= 0)
+        {
+            next.selectedSlot = m_expandedSlotIndex;
+            next.selectedSubIndex = earlyCloseHit;
+            next.keepExistingSubmenu = true;
+        }
 
         const bool allowHoverAnim = IsClientAreaAnimationEnabled();
         auto ensureAnimRunning = [&]() {
@@ -1216,6 +1280,7 @@ namespace winrings
             }
             if (next.updateCorridorOrigin)
                 m_corridorOriginDip = localPt;
+            m_hoveredCloseSubIndex = -1;
             if (needsRender)
                 Render();
             return;
@@ -1225,6 +1290,7 @@ namespace winrings
         {
             m_selectedIndex = next.selectedSlot;
             m_selectedSubIndex = -1;
+            m_hoveredCloseSubIndex = -1;
 
             if (m_selectedIndex >= 0 && SlotHasSubmenuItems(m_visibleSlots[static_cast<size_t>(m_selectedIndex)]))
                 OpenSubmenuForSlot(m_selectedIndex, localPt);
@@ -1282,6 +1348,13 @@ namespace winrings
                     ensureAnimRunning();
                 }
                 needsThumbSync = true;
+                needsRender = true;
+            }
+
+            const int nextCloseIdx = HitTestSubmenuCloseButton(localPt);
+            if (nextCloseIdx != m_hoveredCloseSubIndex)
+            {
+                m_hoveredCloseSubIndex = nextCloseIdx;
                 needsRender = true;
             }
         }
@@ -1860,13 +1933,19 @@ namespace winrings
             return;
 
         const ThemeColors tc = BuildThemeColors();
-        const bool wcaActive = m_wcaBackdropActive && m_wcaBackdropHwnd != nullptr;
-        const bool acrylicActive = !wcaActive && m_acrylicBackdrop.IsActive() && m_maskSwapChain && m_maskTargetBitmap;
+        const bool wcaActive = !m_config.disableRingBlur && m_wcaBackdropActive && m_wcaBackdropHwnd != nullptr;
+        const bool acrylicActive = !m_config.disableRingBlur && !wcaActive &&
+            m_acrylicBackdrop.IsActive() && m_maskSwapChain && m_maskTargetBitmap;
         const bool hasLiveBackdrop = wcaActive || acrylicActive;
         if (wcaActive)
             UpdateWcaMaterial(tc);
-        else if (acrylicActive)
-            m_acrylicBackdrop.UpdateMaterial(BuildAcrylicMaterial());
+        else
+        {
+            if (m_config.disableRingBlur && m_wcaBackdropHwnd && IsWindow(m_wcaBackdropHwnd))
+                ShowWindow(m_wcaBackdropHwnd, SW_HIDE);
+            if (acrylicActive)
+                m_acrylicBackdrop.UpdateMaterial(BuildAcrylicMaterial());
+        }
 
         const RingGeometry geom = ActiveGeometry();
         const float dpiScale = static_cast<float>(m_dpiScale);
@@ -1995,7 +2074,7 @@ namespace winrings
         // When native WCA ACCENT_ENABLE_ACRYLICBLURBEHIND is active, Windows 11 DWM supplies the exact native
         // A4S-Menu texture and glow directly — no synthetic noise overlay is painted on top.
         EnsureNoiseBrush();
-        const bool useNoise = (!wcaActive && m_noiseBrush != nullptr && tc.noiseOpacity > 0.002f);
+        const bool useNoise = (!m_config.disableRingBlur && !wcaActive && m_noiseBrush != nullptr && tc.noiseOpacity > 0.002f);
         if (useNoise)
             m_noiseBrush->SetOpacity(tc.noiseOpacity);
 
@@ -2100,8 +2179,96 @@ namespace winrings
                 innerGrad.Get(), kInnerRimW);
         }
 
-        // 2. Slot icons, running dots, selection circle & count badge (ZERO blue cone wedge!)
+        // 1b. Selection Indicator (SectorWedge / PointerLine) styled with tc.accent
         const int slotCount = static_cast<int>(m_visibleSlots.size());
+        if (m_selectedIndex >= 0 && m_selectedIndex < slotCount &&
+            m_config.selectionIndicator != SelectionIndicatorStyle::GlowOnly)
+        {
+            const double selAngle = GetSlotAngle(m_selectedIndex, slotCount);
+            const double halfAngle = kPi / static_cast<double>((std::max)(slotCount, 4));
+            if (m_config.selectionIndicator == SelectionIndicatorStyle::SectorWedge && m_d2dFactory)
+            {
+                const double a0 = selAngle - halfAngle;
+                const double a1 = selAngle + halfAngle;
+                const double span = a1 - a0;
+                const float rOut = outerR - 1.0f;
+                const float rIn = holeR + 1.0f;
+                auto ptAt = [&](float r, double ang) -> D2D1_POINT_2F {
+                    return D2D1::Point2F(
+                        centerPt.x + r * static_cast<float>(std::cos(ang)),
+                        centerPt.y + r * static_cast<float>(std::sin(ang)));
+                };
+
+                Microsoft::WRL::ComPtr<ID2D1PathGeometry> wedgeGeo;
+                if (SUCCEEDED(m_d2dFactory->CreatePathGeometry(wedgeGeo.GetAddressOf())) && wedgeGeo)
+                {
+                    Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+                    if (SUCCEEDED(wedgeGeo->Open(sink.GetAddressOf())) && sink)
+                    {
+                        const D2D1_ARC_SIZE arcSz = (span > kPi) ? D2D1_ARC_SIZE_LARGE : D2D1_ARC_SIZE_SMALL;
+                        sink->BeginFigure(ptAt(rOut, a0), D2D1_FIGURE_BEGIN_FILLED);
+                        sink->AddArc(D2D1::ArcSegment(ptAt(rOut, a1), D2D1::SizeF(rOut, rOut),
+                            0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, arcSz));
+                        sink->AddLine(ptAt(rIn, a1));
+                        sink->AddArc(D2D1::ArcSegment(ptAt(rIn, a0), D2D1::SizeF(rIn, rIn),
+                            0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, arcSz));
+                        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                        sink->Close();
+
+                        D2D1_COLOR_F fillCol = tc.accent;
+                        fillCol.a = 0.24f;
+                        if (auto fb = mkBrush(fillCol))
+                            m_d2dContext->FillGeometry(wedgeGeo.Get(), fb.Get());
+                    }
+                }
+
+                auto strokeArc = [&](float r, double startAng, double endAng, float width, float alpha) {
+                    Microsoft::WRL::ComPtr<ID2D1PathGeometry> arcGeo;
+                    if (SUCCEEDED(m_d2dFactory->CreatePathGeometry(arcGeo.GetAddressOf())) && arcGeo)
+                    {
+                        Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+                        if (SUCCEEDED(arcGeo->Open(sink.GetAddressOf())) && sink)
+                        {
+                            const D2D1_ARC_SIZE arcSz = ((endAng - startAng) > kPi) ? D2D1_ARC_SIZE_LARGE : D2D1_ARC_SIZE_SMALL;
+                            sink->BeginFigure(ptAt(r, startAng), D2D1_FIGURE_BEGIN_HOLLOW);
+                            sink->AddArc(D2D1::ArcSegment(ptAt(r, endAng), D2D1::SizeF(r, r),
+                                0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, arcSz));
+                            sink->EndFigure(D2D1_FIGURE_END_OPEN);
+                            sink->Close();
+
+                            D2D1_COLOR_F scCol = tc.accent;
+                            scCol.a = alpha;
+                            if (auto sb = mkBrush(scCol))
+                                m_d2dContext->DrawGeometry(arcGeo.Get(), sb.Get(), width);
+                        }
+                    }
+                };
+                strokeArc(rOut, a0, a1, 1.8f, 0.92f);
+                strokeArc(rIn, a0, a1, 1.2f, 0.65f);
+            }
+            else if (m_config.selectionIndicator == SelectionIndicatorStyle::PointerLine && m_d2dFactory)
+            {
+                const float c = static_cast<float>(std::cos(selAngle));
+                const float s = static_cast<float>(std::sin(selAngle));
+                const float rLineStart = holeR + 2.0f;
+                const float rLineEnd = (std::max)(rLineStart + 4.0f, static_cast<float>(geom.ringRadius - geom.iconSize * 0.56));
+                D2D1_COLOR_F lineCol = tc.accent;
+                lineCol.a = 0.92f;
+                if (auto lb = mkBrush(lineCol))
+                {
+                    Microsoft::WRL::ComPtr<ID2D1StrokeStyle> capStyle;
+                    D2D1_STROKE_STYLE_PROPERTIES ssp = D2D1::StrokeStyleProperties(
+                        D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND);
+                    m_d2dFactory->CreateStrokeStyle(ssp, nullptr, 0, capStyle.GetAddressOf());
+                    m_d2dContext->DrawLine(
+                        D2D1::Point2F(centerPt.x + rLineStart * c, centerPt.y + rLineStart * s),
+                        D2D1::Point2F(centerPt.x + rLineEnd * c, centerPt.y + rLineEnd * s),
+                        lb.Get(), 2.2f, capStyle.Get());
+                }
+            }
+        }
+
+        // 2. Slot icons, running dots, selection circle & count badge
         const bool searchFiltering = !m_filterQuery.empty();
         for (int pass = 0; pass < 2; ++pass)
         {
@@ -2327,8 +2494,8 @@ namespace winrings
                     if (m_smallFormat)
                     {
                         D2D1_RECT_F textRect = (m_config.windowViewMode == WindowViewMode::TitleColumn)
-                            ? D2D1::RectF(rect.left + 8, rect.top, rect.right - 8, rect.bottom)
-                            : D2D1::RectF(rect.left + 6, rect.bottom - 20.0f, rect.right - 6, rect.bottom - 2.0f);
+                            ? D2D1::RectF(rect.left + 8, rect.top, rect.right - 26.0f, rect.bottom)
+                            : D2D1::RectF(rect.left + 6, rect.bottom - 20.0f, rect.right - 24.0f, rect.bottom - 2.0f);
                         const std::wstring txt = (card.window->isMinimized && m_config.windowViewMode == WindowViewMode::TitleColumn)
                             ? (card.window->title + L" (minimized)")
                             : card.window->title;
@@ -2336,6 +2503,27 @@ namespace winrings
                         if (card.window->isMinimized) txtCol.a *= 0.72f;
                         if (auto b = mkBrush(txtCol))
                             m_d2dContext->DrawTextW(txt.c_str(), static_cast<UINT32>(txt.size()), m_smallFormat.Get(), textRect, b.Get());
+                    }
+
+                    const int cardIdx = static_cast<int>(i);
+                    const bool closeHot = (cardIdx == m_hoveredCloseSubIndex);
+                    const D2D1_RECT_F closeRc = GetSubmenuCloseRectDip(rect, m_config.windowViewMode);
+                    const float ccx = (closeRc.left + closeRc.right) * 0.5f;
+                    const float ccy = (closeRc.top + closeRc.bottom) * 0.5f;
+                    const float cr = (closeRc.right - closeRc.left) * 0.5f;
+                    const D2D1_COLOR_F closeBg = closeHot
+                        ? D2D1::ColorF(220.0f / 255.0f, 53.0f / 255.0f, 69.0f / 255.0f, 0.94f)
+                        : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.12f);
+                    if (auto cb = mkBrush(closeBg))
+                        m_d2dContext->FillEllipse(D2D1::Ellipse(D2D1::Point2F(ccx, ccy), cr, cr), cb.Get());
+                    const D2D1_COLOR_F closeFg = closeHot
+                        ? D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f)
+                        : D2D1::ColorF(tc.textColor.r, tc.textColor.g, tc.textColor.b, 0.76f);
+                    if (auto xb = mkBrush(closeFg))
+                    {
+                        const float xs = 3.2f;
+                        m_d2dContext->DrawLine(D2D1::Point2F(ccx - xs, ccy - xs), D2D1::Point2F(ccx + xs, ccy + xs), xb.Get(), 1.4f);
+                        m_d2dContext->DrawLine(D2D1::Point2F(ccx + xs, ccy - xs), D2D1::Point2F(ccx - xs, ccy + xs), xb.Get(), 1.4f);
                     }
                 }
             }
@@ -2434,6 +2622,13 @@ namespace winrings
     {
         if (!m_hwnd)
             return;
+        HWND hoveredWinHwnd = nullptr;
+        if (m_selectedSubIndex >= 0 && m_selectedSubIndex < static_cast<int>(m_submenuCards.size()))
+        {
+            const auto& card = m_submenuCards[static_cast<size_t>(m_selectedSubIndex)];
+            if (card.window && card.window->hwnd && IsWindow(card.window->hwnd))
+                hoveredWinHwnd = card.window->hwnd;
+        }
         ClearSubmenu();
         m_contextMenuOpen = true;
 
@@ -2454,16 +2649,51 @@ namespace winrings
             CmdShowInExplorer = 204,
             CmdTogglePin = 205,
             CmdEmptyRecycleBin = 206,
+            CmdRunAsAdmin = 207,
+            CmdCloseSubWindow = 208,
+            CmdEndTask = 209,
             CmdNewCollection = 300,
+            CmdToggleTopBar = 301,
             CmdSettings = 302,
-            CmdExit = 303
+            CmdExit = 303,
+            CmdToggleMediaIsland = 304
         };
 
         RingSlot targetSlot;
+        DWORD targetPid = 0;
+        std::wstring adminTarget;
         const bool hasSlot = (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_visibleSlots.size()));
         if (hasSlot)
         {
             targetSlot = m_visibleSlots[static_cast<size_t>(m_selectedIndex)];
+            const HWND actionWinHwnd = hoveredWinHwnd
+                ? hoveredWinHwnd
+                : (!targetSlot.windows.empty() ? targetSlot.windows[0].hwnd : nullptr);
+            if (actionWinHwnd && IsWindow(actionWinHwnd))
+                GetWindowThreadProcessId(actionWinHwnd, &targetPid);
+
+            if ((targetSlot.kind == SlotKind::App || targetSlot.kind == SlotKind::Script) &&
+                !targetSlot.pathOrUrl.empty() &&
+                targetSlot.pathOrUrl.rfind(L"shell:", 0) != 0 &&
+                (targetSlot.pathOrUrl.find(L'\\') != std::wstring::npos ||
+                 targetSlot.pathOrUrl.find(L'/') != std::wstring::npos))
+            {
+                adminTarget = targetSlot.pathOrUrl;
+            }
+            else if (targetSlot.kind == SlotKind::App && targetSlot.pathOrUrl.empty() &&
+                     targetPid != 0 && targetPid != GetCurrentProcessId())
+            {
+                HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, targetPid);
+                if (hProc)
+                {
+                    wchar_t exeBuf[MAX_PATH * 2]{};
+                    DWORD len = ARRAYSIZE(exeBuf);
+                    if (QueryFullProcessImageNameW(hProc, 0, exeBuf, &len) && len > 0)
+                        adminTarget.assign(exeBuf, len);
+                    CloseHandle(hProc);
+                }
+            }
+
             if (!targetSlot.windows.empty())
             {
                 const size_t limit = (std::min)(targetSlot.windows.size(), size_t{ 9 });
@@ -2474,10 +2704,16 @@ namespace winrings
             if (targetSlot.kind == SlotKind::App)
             {
                 AppendMenuW(menu, MF_STRING, CmdNewWindow, L"New Window");
+                if (!adminTarget.empty())
+                    AppendMenuW(menu, MF_STRING, CmdRunAsAdmin, L"Run as Administrator");
                 if (!targetSlot.windows.empty())
                 {
                     AppendMenuW(menu, MF_STRING, CmdMinAll, L"Minimize All");
+                    if (hoveredWinHwnd)
+                        AppendMenuW(menu, MF_STRING, CmdCloseSubWindow, L"Close Window");
                     AppendMenuW(menu, MF_STRING, CmdCloseAll, L"Close All");
+                    if (targetPid != 0 && targetPid != GetCurrentProcessId())
+                        AppendMenuW(menu, MF_STRING, CmdEndTask, L"End Task");
                 }
                 if (!targetSlot.pathOrUrl.empty())
                 {
@@ -2488,7 +2724,13 @@ namespace winrings
             }
             else if (targetSlot.kind == SlotKind::File || targetSlot.kind == SlotKind::Folder || targetSlot.kind == SlotKind::Script)
             {
+                if (hoveredWinHwnd)
+                    AppendMenuW(menu, MF_STRING, CmdCloseSubWindow, L"Close Window");
+                if (!adminTarget.empty())
+                    AppendMenuW(menu, MF_STRING, CmdRunAsAdmin, L"Run as Administrator");
                 AppendMenuW(menu, MF_STRING, CmdShowInExplorer, L"Show in Explorer");
+                if (targetPid != 0 && targetPid != GetCurrentProcessId())
+                    AppendMenuW(menu, MF_STRING, CmdEndTask, L"End Task");
                 if (targetSlot.isPinned)
                     AppendMenuW(menu, MF_STRING, CmdTogglePin, L"Unpin from Ring");
             }
@@ -2504,6 +2746,10 @@ namespace winrings
         else
         {
             AppendMenuW(menu, MF_STRING, CmdNewCollection, L"New Collection...");
+            AppendMenuW(menu, MF_STRING | (m_config.topBarEnabled ? MF_CHECKED : MF_UNCHECKED),
+                CmdToggleTopBar, L"Toggle Top Minimal Bar");
+            AppendMenuW(menu, MF_STRING | (m_config.mediaIslandEnabled ? MF_CHECKED : MF_UNCHECKED),
+                CmdToggleMediaIsland, L"Show Media Island");
             AppendMenuW(menu, MF_STRING, CmdSettings, L"Settings...");
             AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(menu, MF_STRING, CmdExit, L"Exit WinRings");
@@ -2536,12 +2782,27 @@ namespace winrings
             Dismiss();
             SlotModel::LaunchPathOrUrl(targetSlot.pathOrUrl);
             break;
+        case CmdRunAsAdmin:
+            Dismiss();
+            if (!adminTarget.empty())
+                ShellExecuteW(nullptr, L"runas", adminTarget.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            break;
         case CmdMinAll:
             for (const auto& w : targetSlot.windows) WindowTracker::MinimizeWindow(w.hwnd);
             Dismiss();
             break;
+        case CmdCloseSubWindow:
+            if (hoveredWinHwnd)
+                WindowTracker::CloseWindow(hoveredWinHwnd);
+            Dismiss();
+            break;
         case CmdCloseAll:
             for (const auto& w : targetSlot.windows) WindowTracker::CloseWindow(w.hwnd);
+            Dismiss();
+            break;
+        case CmdEndTask:
+            if (targetPid != 0 && targetPid != GetCurrentProcessId())
+                WindowTracker::TerminateProcessByPid(targetPid);
             Dismiss();
             break;
         case CmdOpenLocation:
@@ -2584,6 +2845,14 @@ namespace winrings
             Dismiss();
             break;
         }
+        case CmdToggleTopBar:
+            Dismiss();
+            if (m_callbacks.onToggleTopBarRequested) m_callbacks.onToggleTopBarRequested();
+            break;
+        case CmdToggleMediaIsland:
+            Dismiss();
+            if (m_callbacks.onToggleMediaIslandRequested) m_callbacks.onToggleMediaIslandRequested();
+            break;
         case CmdSettings:
             Dismiss();
             if (m_callbacks.launchTools) m_callbacks.launchTools(L"--settings");
@@ -3000,6 +3269,43 @@ namespace winrings
             if (!m_hasLastPointer && m_selectedIndex < 0 && m_selectedSubIndex < 0)
                 UpdatePointer(screenPt.x, screenPt.y);
             const PointD localDip{ clientPt.x / m_dpiScale, clientPt.y / m_dpiScale };
+
+            const int closeHit = HitTestSubmenuCloseButton(localDip);
+            if (closeHit >= 0 && closeHit < static_cast<int>(m_submenuCards.size()))
+            {
+                const HWND targetHwnd = m_submenuCards[static_cast<size_t>(closeHit)].window
+                    ? m_submenuCards[static_cast<size_t>(closeHit)].window->hwnd
+                    : nullptr;
+                if (targetHwnd)
+                {
+                    WindowTracker::CloseWindow(targetHwnd);
+                    const int slotIdx = m_expandedSlotIndex;
+                    auto eraseByHwnd = [&](std::vector<WindowEntry>& wins) {
+                        wins.erase(
+                            std::remove_if(wins.begin(), wins.end(),
+                                [&](const WindowEntry& w) { return w.hwnd == targetHwnd; }),
+                            wins.end());
+                    };
+                    if (slotIdx >= 0 && slotIdx < static_cast<int>(m_visibleSlots.size()))
+                        eraseByHwnd(m_visibleSlots[static_cast<size_t>(slotIdx)].windows);
+                    for (auto& s : m_allSlots)
+                        eraseByHwnd(s.windows);
+
+                    m_hoveredCloseSubIndex = -1;
+                    if (slotIdx >= 0 && slotIdx < static_cast<int>(m_visibleSlots.size()) &&
+                        SlotHasSubmenuItems(m_visibleSlots[static_cast<size_t>(slotIdx)]))
+                    {
+                        OpenSubmenuForSlot(slotIdx, localDip);
+                    }
+                    else
+                    {
+                        ClearSubmenu();
+                    }
+                    SyncDwmThumbnails();
+                    Render();
+                }
+                return 0;
+            }
 
             const int hitSub = HitTestSubmenu(localDip);
             if (hitSub >= 0 && hitSub < static_cast<int>(m_submenuCards.size()))

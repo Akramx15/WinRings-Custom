@@ -32,6 +32,8 @@ namespace winrings
         {
             std::function<void(const std::wstring& exeArgs)> launchTools;
             std::function<void(const SwitcherConfig& updatedConfig)> saveAndReloadConfig;
+            std::function<void()> onToggleTopBarRequested;
+            std::function<void()> onToggleMediaIslandRequested;
             std::function<void()> onExitRequested;
             std::function<void()> onOverlayClosed;
         };
@@ -121,6 +123,8 @@ namespace winrings
         void OpenSubmenuForSlot(int slotIndex, PointD originDip);
         void ClearSubmenu();
         int HitTestSubmenu(PointD localDip) const noexcept;
+        D2D1_RECT_F GetSubmenuCloseRectDip(const D2D1_RECT_F& cardRectDip, WindowViewMode mode) const noexcept;
+        int HitTestSubmenuCloseButton(PointD localDip) const noexcept;
         void SyncDwmThumbnails();
         void StepAnimations();
         Microsoft::WRL::ComPtr<ID2D1Geometry> BuildAnnulusGeometry(float outerR, float holeR) const;
@@ -208,6 +212,7 @@ namespace winrings
         int m_selectedIndex = -1;
         int m_expandedSlotIndex = -1;
         int m_selectedSubIndex = -1;
+        int m_hoveredCloseSubIndex = -1;
         RectD m_submenuBoundsDip{};
         PointD m_corridorOriginDip{};
         bool m_submenuIsTitleColumn = false;

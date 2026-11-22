@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <string>
 
+#include "../src/shared/ClockFormat.h"
 #include "../src/shared/CrashGuard.h"
 #include "../src/shared/RadialMath.h"
 #include "../src/shared/RingThemeEngine.h"
@@ -477,6 +478,26 @@ static void TestSearchScoring()
     CHECK(ScoreAliases(heliumAliases, L"nomatch") == -1);
 }
 
+static void TestClockFormat()
+{
+    SYSTEMTIME st{};
+    st.wYear = 2026;
+    st.wMonth = 11;
+    st.wDay = 20; // Friday
+    st.wHour = 16;
+    st.wMinute = 2;
+    st.wSecond = 9;
+
+    const std::wstring compact = FormatClock(st, L"ddd d MMM  h:mm tt", ClockCasing::CompactLower);
+    CHECK(compact == L"Fri 20 Nov  4:02 pm");
+
+    const std::wstring exact = FormatClock(st, L"ddd d MMM  h:mm tt", ClockCasing::Exact);
+    CHECK(exact == L"Fri 20 Nov  4:02 PM");
+
+    const std::wstring upper = FormatClock(st, L"dddd dd MMMM HH:mm:ss", ClockCasing::Upper);
+    CHECK(upper == L"FRIDAY 20 NOVEMBER 16:02:09");
+}
+
 static void TestConfigRoundTrip()
 {
     wchar_t tempDir[MAX_PATH]{};
@@ -491,6 +512,8 @@ static void TestConfigRoundTrip()
     CHECK(orig.glassLevel == 50);
     CHECK(orig.lightDarkMode == 0);
     CHECK(orig.accentColor == L"#0078D4");
+    CHECK(orig.mediaIslandFullscreenMode == MediaIslandFullscreenMode::SyncWithTaskbar);
+    CHECK(orig.mediaIslandOffsetXPct == -1);
     CHECK(orig.SaveToFile(cfgPath));
     SwitcherConfig loadedDefault;
     CHECK(SwitcherConfig::LoadFromFile(cfgPath, loadedDefault));
@@ -500,6 +523,27 @@ static void TestConfigRoundTrip()
     CHECK(loadedDefault.lightDarkMode == 0);
 
     orig.mouseTrigger = MouseTriggerButton::Middle;
+    orig.topBarHeightDip = 32;
+    orig.topBarClockFormat = L"ddd d MMM  h:mm tt";
+    orig.topBarClockCasing = ClockCasing::CompactLower;
+    orig.disableRingBlur = true;
+    orig.selectionIndicator = SelectionIndicatorStyle::PointerLine;
+    orig.winKeyTrigger = false;
+    orig.directSwitchEnabled = true;
+    orig.directSwitchModifiers = MOD_WIN;
+    orig.directSwitchVk = 'F';
+    orig.shakeTriggerEnabled = true;
+    orig.shakeMinReversals = 5;
+    orig.hotCornerEnabled = true;
+    orig.hotCornerPos = HotCornerPos::TopRight;
+    orig.hotCornerAction = HotCornerAction::OpenRing;
+    orig.fullWorkAreaEnabled = false;
+    orig.mediaIslandEnabled = true;
+    orig.mediaIslandPos = MediaIslandPos::Left;
+    orig.mediaIslandHoverExpand = false;
+    orig.mediaIslandMarquee = false;
+    orig.mediaIslandFullscreenMode = MediaIslandFullscreenMode::GamesOnly;
+    orig.mediaIslandOffsetXPct = 42;
     orig.theme = RingTheme::DarkWood;
     orig.glassLevel = 86;
     orig.lightDarkMode = 15;
@@ -515,6 +559,22 @@ static void TestConfigRoundTrip()
     SwitcherConfig loaded;
     CHECK(SwitcherConfig::LoadFromFile(cfgPath, loaded));
     CHECK(loaded.mouseTrigger == MouseTriggerButton::Middle);
+    CHECK(loaded.topBarHeightDip == 32);
+    CHECK(loaded.topBarClockFormat == L"ddd d MMM  h:mm tt");
+    CHECK(loaded.topBarClockCasing == ClockCasing::CompactLower);
+    CHECK(loaded.disableRingBlur == true);
+    CHECK(loaded.selectionIndicator == SelectionIndicatorStyle::PointerLine);
+    CHECK(loaded.winKeyTrigger == false);
+    CHECK(loaded.directSwitchModifiers == MOD_WIN);
+    CHECK(loaded.shakeMinReversals == 5);
+    CHECK(loaded.hotCornerPos == HotCornerPos::TopRight);
+    CHECK(loaded.hotCornerAction == HotCornerAction::OpenRing);
+    CHECK(loaded.fullWorkAreaEnabled == false);
+    CHECK(loaded.mediaIslandPos == MediaIslandPos::Left);
+    CHECK(loaded.mediaIslandHoverExpand == false);
+    CHECK(loaded.mediaIslandMarquee == false);
+    CHECK(loaded.mediaIslandFullscreenMode == MediaIslandFullscreenMode::GamesOnly);
+    CHECK(loaded.mediaIslandOffsetXPct == 42);
     CHECK(loaded.theme == RingTheme::DarkWood);
     CHECK(loaded.glassLevel == 86);
     CHECK(loaded.lightDarkMode == 15);
@@ -707,6 +767,7 @@ int wmain()
     TestRadialMath();
     TestDownloadsAndSubmenuHoverTransitions();
     TestSearchScoring();
+    TestClockFormat();
     TestCrashGuard();
     TestConfigRoundTrip();
     TestThemeMaterialEngine();

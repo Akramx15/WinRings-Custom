@@ -2,3 +2,5 @@ LIBRARY WinRingsShell
 EXPORTS
     WinRings_GetApi
     WinRings_RunPreview
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

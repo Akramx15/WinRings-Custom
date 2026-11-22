@@ -29,6 +29,10 @@ namespace winrings
             std::function<void(wchar_t ch)> onFilterChar;
             std::function<void()> onFilterBackspace;
             std::function<void()> onUserPointerDelta;
+            std::function<void()> onDirectSwitchStep;
+            std::function<void()> onDirectSwitchCommit;
+            std::function<bool(UINT msg)> shouldSuppressTouchpadMouse;
+            std::function<bool(POINT screenPt, short wheelDelta)> onMediaIslandWheel;
         };
 
         InputEngine() = default;
@@ -54,6 +58,9 @@ namespace winrings
         bool IsConfiguredMouseUp(UINT msg, DWORD mouseData) const noexcept;
         bool IsHotkeyMatch(DWORD vkCode) const noexcept;
         bool IsHotkeyModifierVk(DWORD vkCode) const noexcept;
+        bool IsDirectSwitchMatch(DWORD vkCode) const noexcept;
+        bool IsDirectSwitchModifierVk(DWORD vkCode) const noexcept;
+        static void SendDummyMaskKey(bool includeLWinUp = false) noexcept;
 
         void StartTrigger(bool mouseTrigger);
         void EndTrigger();
@@ -69,6 +76,9 @@ namespace winrings
         bool m_rightButtonDown = false;
         bool m_chordActive = false;
         bool m_outsideClickPending = false;
+        bool m_winKeyDown = false;
+        bool m_winComboUsed = false;
+        bool m_directSwitchActive = false;
         LONGLONG m_triggerDownQpc = 0;
         LONGLONG m_lastTapQpc = 0;
         LONGLONG m_qpcFreq = 1;

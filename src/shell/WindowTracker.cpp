@@ -172,6 +172,8 @@ namespace winrings
 
     void WindowTracker::OnWinEventForeground(HWND hwnd)
     {
+        if (m_mruFrozen)
+            return;
         if (!hwnd || !IsWindow(hwnd))
             return;
         wchar_t cls[128]{};
@@ -418,6 +420,46 @@ namespace winrings
         return ctx.groups;
     }
 
+    std::vector<HWND> WindowTracker::GetEligibleMruWindows(HWND ignoreHwnd)
+    {
+        struct Ctx
+        {
+            HWND shell;
+            HWND ignore;
+            std::vector<HWND> result;
+            std::unordered_map<HWND, bool> seen;
+        } ctx{ GetShellWindow(), ignoreHwnd, {}, {} };
+
+        auto tryAdd = [&](HWND hwnd)
+        {
+            if (!hwnd || ctx.seen.find(hwnd) != ctx.seen.end())
+                return;
+            std::wstring title, exePath;
+            DWORD pid = 0;
+            if (!IsEligibleWindow(hwnd, ctx.shell, ctx.ignore, 0, title, pid, exePath))
+                return;
+            ctx.seen.emplace(hwnd, true);
+            ctx.result.push_back(hwnd);
+        };
+
+        if (HWND fg = GetForegroundWindow())
+            tryAdd(fg);
+
+        for (HWND hwnd : m_mruOrder)
+        {
+            if (IsWindow(hwnd))
+                tryAdd(hwnd);
+        }
+
+        EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+            auto* fn = reinterpret_cast<decltype(tryAdd)*>(lp);
+            (*fn)(hwnd);
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&tryAdd));
+
+        return ctx.result;
+    }
+
     Microsoft::WRL::ComPtr<IWICBitmapSource> WindowTracker::ConvertHIconToWic(HICON hIcon)
     {
         if (!hIcon || !m_wicFactory)
@@ -558,6 +600,32 @@ namespace winrings
         }
     }
 
+    void WindowTracker::ActivateWindowDirect(HWND target, bool commitToMru)
+    {
+        if (!target || !IsWindow(target))
+            return;
+
+        if (IsIconic(target))
+            ShowWindowAsync(target, SW_RESTORE);
+
+        if (!SetForegroundWindow(target))
+        {
+            HWND fg = GetForegroundWindow();
+            const DWORD curTid = GetCurrentThreadId();
+            const DWORD fgTid = fg ? GetWindowThreadProcessId(fg, nullptr) : 0;
+            const DWORD tgtTid = GetWindowThreadProcessId(target, nullptr);
+            const bool attFg = fgTid && fgTid != curTid && AttachThreadInput(curTid, fgTid, TRUE) != FALSE;
+            const bool attTgt = tgtTid && tgtTid != curTid && tgtTid != fgTid && AttachThreadInput(curTid, tgtTid, TRUE) != FALSE;
+            BringWindowToTop(target);
+            SetForegroundWindow(target);
+            if (attTgt) AttachThreadInput(curTid, tgtTid, FALSE);
+            if (attFg) AttachThreadInput(curTid, fgTid, FALSE);
+        }
+
+        if (commitToMru)
+            SwapActiveHistory(target);
+    }
+
     void WindowTracker::CancelPointerGlide() noexcept
     {
         if (m_gliding && m_eventWindow)
@@ -604,5 +672,17 @@ namespace winrings
     {
         if (hwnd && IsWindow(hwnd))
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
+
+    void WindowTracker::TerminateProcessByPid(DWORD pid) noexcept
+    {
+        if (pid == 0 || pid == GetCurrentProcessId())
+            return;
+        HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+        if (hProc)
+        {
+            TerminateProcess(hProc, 1);
+            CloseHandle(hProc);
+        }
     }
 } // namespace winrings

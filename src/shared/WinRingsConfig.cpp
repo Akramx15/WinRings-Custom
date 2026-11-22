@@ -81,6 +81,30 @@ namespace winrings
         return L"A4S";
     }
 
+    const wchar_t* ToString(TopBarBackdrop v) noexcept
+    {
+        switch (v)
+        {
+        case TopBarBackdrop::Clear: return L"Clear";
+        case TopBarBackdrop::Frosted: return L"Frosted";
+        case TopBarBackdrop::Native: return L"Native";
+        }
+        return L"Clear";
+    }
+
+    const wchar_t* ToString(ClockCasing v) noexcept
+    {
+        switch (v)
+        {
+        case ClockCasing::CompactLower: return L"CompactLower";
+        case ClockCasing::Exact: return L"Exact";
+        case ClockCasing::Lower: return L"Lower";
+        case ClockCasing::Upper: return L"Upper";
+        case ClockCasing::Title: return L"Title";
+        }
+        return L"CompactLower";
+    }
+
     const wchar_t* ToString(SlotKind v) noexcept
     {
         switch (v)
@@ -94,6 +118,69 @@ namespace winrings
         case SlotKind::RecycleBin: return L"RecycleBin";
         }
         return L"App";
+    }
+
+    const wchar_t* ToString(SelectionIndicatorStyle v) noexcept
+    {
+        switch (v)
+        {
+        case SelectionIndicatorStyle::GlowOnly: return L"GlowOnly";
+        case SelectionIndicatorStyle::SectorWedge: return L"SectorWedge";
+        case SelectionIndicatorStyle::PointerLine: return L"PointerLine";
+        }
+        return L"SectorWedge";
+    }
+
+    const wchar_t* ToString(HotCornerPos v) noexcept
+    {
+        switch (v)
+        {
+        case HotCornerPos::TopLeft: return L"TopLeft";
+        case HotCornerPos::TopRight: return L"TopRight";
+        }
+        return L"TopLeft";
+    }
+
+    const wchar_t* ToString(HotCornerAction v) noexcept
+    {
+        switch (v)
+        {
+        case HotCornerAction::TaskView: return L"TaskView";
+        case HotCornerAction::OpenRing: return L"OpenRing";
+        }
+        return L"TaskView";
+    }
+
+    const wchar_t* ToString(TouchpadCornerPos v) noexcept
+    {
+        switch (v)
+        {
+        case TouchpadCornerPos::TopLeft: return L"TopLeft";
+        case TouchpadCornerPos::TopRight: return L"TopRight";
+        }
+        return L"TopRight";
+    }
+
+    const wchar_t* ToString(MediaIslandPos v) noexcept
+    {
+        switch (v)
+        {
+        case MediaIslandPos::Center: return L"Center";
+        case MediaIslandPos::Left: return L"Left";
+        case MediaIslandPos::NearTray: return L"NearTray";
+        }
+        return L"Left";
+    }
+
+    const wchar_t* ToString(MediaIslandFullscreenMode v) noexcept
+    {
+        switch (v)
+        {
+        case MediaIslandFullscreenMode::SyncWithTaskbar: return L"SyncWithTaskbar";
+        case MediaIslandFullscreenMode::GamesOnly: return L"GamesOnly";
+        case MediaIslandFullscreenMode::NeverHide: return L"NeverHide";
+        }
+        return L"SyncWithTaskbar";
     }
 
     namespace
@@ -661,6 +748,113 @@ namespace winrings
         TryGetBool(*obj, "includeUnpinnedRunningApps", cfg.includeUnpinnedRunningApps);
         TryGetInt(*obj, "maxSlots", cfg.maxSlots);
 
+        TryGetBool(*obj, "topBarEnabled", cfg.topBarEnabled);
+        TryGetBool(*obj, "topBarDockTop", cfg.topBarDockTop);
+        TryGetInt(*obj, "topBarHeightDip", cfg.topBarHeightDip);
+        TryGetBool(*obj, "topBarPreserveFontSize", cfg.topBarPreserveFontSize);
+        TryGetBool(*obj, "topBarClockSingleLine", cfg.topBarClockSingleLine);
+        TryGetWString(*obj, "topBarClockFormat", cfg.topBarClockFormat);
+        if (TryGetWString(*obj, "topBarClockCasing", s))
+        {
+            cfg.topBarClockCasing = ParseEnum<ClockCasing>(s, cfg.topBarClockCasing, {
+                { L"CompactLower", ClockCasing::CompactLower },
+                { L"Exact", ClockCasing::Exact },
+                { L"Lower", ClockCasing::Lower },
+                { L"Upper", ClockCasing::Upper },
+                { L"Title", ClockCasing::Title }
+            });
+        }
+        TryGetBool(*obj, "topBarHideAppButtons", cfg.topBarHideAppButtons);
+        TryGetBool(*obj, "topBarHideStart", cfg.topBarHideStart);
+        TryGetBool(*obj, "topBarHideSearch", cfg.topBarHideSearch);
+        TryGetBool(*obj, "topBarHideTaskView", cfg.topBarHideTaskView);
+        TryGetBool(*obj, "topBarHideWidgets", cfg.topBarHideWidgets);
+        if (TryGetWString(*obj, "topBarBackdrop", s))
+        {
+            cfg.topBarBackdrop = ParseEnum<TopBarBackdrop>(s, cfg.topBarBackdrop, {
+                { L"Clear", TopBarBackdrop::Clear },
+                { L"Frosted", TopBarBackdrop::Frosted },
+                { L"Native", TopBarBackdrop::Native }
+            });
+        }
+        TryGetBool(*obj, "topBarAllMonitors", cfg.topBarAllMonitors);
+
+        TryGetBool(*obj, "disableRingBlur", cfg.disableRingBlur);
+        if (TryGetWString(*obj, "selectionIndicator", s))
+        {
+            cfg.selectionIndicator = ParseEnum<SelectionIndicatorStyle>(s, cfg.selectionIndicator, {
+                { L"GlowOnly", SelectionIndicatorStyle::GlowOnly },
+                { L"SectorWedge", SelectionIndicatorStyle::SectorWedge },
+                { L"PointerLine", SelectionIndicatorStyle::PointerLine }
+            });
+        }
+
+        TryGetBool(*obj, "winKeyTrigger", cfg.winKeyTrigger);
+        TryGetBool(*obj, "directSwitchEnabled", cfg.directSwitchEnabled);
+        TryGetUInt(*obj, "directSwitchModifiers", cfg.directSwitchModifiers);
+        TryGetUInt(*obj, "directSwitchVk", cfg.directSwitchVk);
+
+        TryGetBool(*obj, "touchpadPhysLeftClickTrigger", cfg.touchpadPhysLeftClickTrigger);
+        TryGetBool(*obj, "touchpadCornerTrigger", cfg.touchpadCornerTrigger);
+        if (TryGetWString(*obj, "touchpadCornerPos", s))
+        {
+            cfg.touchpadCornerPos = ParseEnum<TouchpadCornerPos>(s, cfg.touchpadCornerPos, {
+                { L"TopLeft", TouchpadCornerPos::TopLeft },
+                { L"TopRight", TouchpadCornerPos::TopRight }
+            });
+        }
+        TryGetInt(*obj, "touchpadCornerSizePct", cfg.touchpadCornerSizePct);
+
+        TryGetBool(*obj, "shakeTriggerEnabled", cfg.shakeTriggerEnabled);
+        TryGetInt(*obj, "shakeMinReversals", cfg.shakeMinReversals);
+        TryGetInt(*obj, "shakeWindowMs", cfg.shakeWindowMs);
+        TryGetInt(*obj, "shakeMinAmplitudeDip", cfg.shakeMinAmplitudeDip);
+        TryGetBool(*obj, "shakeSuppressFullscreen", cfg.shakeSuppressFullscreen);
+
+        TryGetBool(*obj, "hotCornerEnabled", cfg.hotCornerEnabled);
+        if (TryGetWString(*obj, "hotCornerPos", s))
+        {
+            cfg.hotCornerPos = ParseEnum<HotCornerPos>(s, cfg.hotCornerPos, {
+                { L"TopLeft", HotCornerPos::TopLeft },
+                { L"TopRight", HotCornerPos::TopRight }
+            });
+        }
+        if (TryGetWString(*obj, "hotCornerAction", s))
+        {
+            cfg.hotCornerAction = ParseEnum<HotCornerAction>(s, cfg.hotCornerAction, {
+                { L"TaskView", HotCornerAction::TaskView },
+                { L"OpenRing", HotCornerAction::OpenRing }
+            });
+        }
+        TryGetInt(*obj, "hotCornerPressureThreshold", cfg.hotCornerPressureThreshold);
+
+        TryGetBool(*obj, "fullWorkAreaEnabled", cfg.fullWorkAreaEnabled);
+        TryGetBool(*obj, "fullWorkAreaPillClip", cfg.fullWorkAreaPillClip);
+        TryGetBool(*obj, "fullWorkAreaHotkeys", cfg.fullWorkAreaHotkeys);
+
+        TryGetBool(*obj, "mediaIslandEnabled", cfg.mediaIslandEnabled);
+        if (TryGetWString(*obj, "mediaIslandPos", s))
+        {
+            cfg.mediaIslandPos = ParseEnum<MediaIslandPos>(s, cfg.mediaIslandPos, {
+                { L"Center", MediaIslandPos::Center },
+                { L"Left", MediaIslandPos::Left },
+                { L"NearTray", MediaIslandPos::NearTray }
+            });
+        }
+        TryGetBool(*obj, "mediaIslandHoverExpand", cfg.mediaIslandHoverExpand);
+        TryGetBool(*obj, "mediaIslandHideWhenPaused", cfg.mediaIslandHideWhenPaused);
+        TryGetBool(*obj, "mediaIslandScrollVolume", cfg.mediaIslandScrollVolume);
+        TryGetBool(*obj, "mediaIslandMarquee", cfg.mediaIslandMarquee);
+        if (TryGetWString(*obj, "mediaIslandFullscreenMode", s))
+        {
+            cfg.mediaIslandFullscreenMode = ParseEnum<MediaIslandFullscreenMode>(s, cfg.mediaIslandFullscreenMode, {
+                { L"SyncWithTaskbar", MediaIslandFullscreenMode::SyncWithTaskbar },
+                { L"GamesOnly", MediaIslandFullscreenMode::GamesOnly },
+                { L"NeverHide", MediaIslandFullscreenMode::NeverHide }
+            });
+        }
+        TryGetInt(*obj, "mediaIslandOffsetXPct", cfg.mediaIslandOffsetXPct);
+
         const auto pinsIt = obj->find("pinnedSlots");
         if (pinsIt != obj->end() && pinsIt->second.IsArray())
         {
@@ -679,6 +873,16 @@ namespace winrings
         cfg.glassLevel = std::clamp(cfg.glassLevel, 0, 100);
         cfg.lightDarkMode = std::clamp(cfg.lightDarkMode, 0, 100);
         cfg.maxSlots = std::clamp(cfg.maxSlots, 4, 24);
+        cfg.topBarHeightDip = std::clamp(cfg.topBarHeightDip, 24, 52);
+        cfg.touchpadCornerSizePct = std::clamp(cfg.touchpadCornerSizePct, 10, 30);
+        cfg.shakeMinReversals = std::clamp(cfg.shakeMinReversals, 3, 8);
+        cfg.shakeWindowMs = std::clamp(cfg.shakeWindowMs, 200, 800);
+        cfg.shakeMinAmplitudeDip = std::clamp(cfg.shakeMinAmplitudeDip, 15, 80);
+        cfg.hotCornerPressureThreshold = std::clamp(cfg.hotCornerPressureThreshold, 50, 400);
+        if (cfg.mediaIslandOffsetXPct >= 0)
+            cfg.mediaIslandOffsetXPct = std::clamp(cfg.mediaIslandOffsetXPct, 0, 100);
+        else
+            cfg.mediaIslandOffsetXPct = -1;
 
         outConfig = std::move(cfg);
         return true;
@@ -741,6 +945,58 @@ namespace winrings
         addBool("shiftCenterOnActiveMonitor", shiftCenterOnActiveMonitor);
         addBool("includeUnpinnedRunningApps", includeUnpinnedRunningApps);
         addInt("maxSlots", maxSlots);
+
+        addBool("topBarEnabled", topBarEnabled);
+        addBool("topBarDockTop", topBarDockTop);
+        addInt("topBarHeightDip", topBarHeightDip);
+        addBool("topBarPreserveFontSize", topBarPreserveFontSize);
+        addBool("topBarClockSingleLine", topBarClockSingleLine);
+        addWStr("topBarClockFormat", topBarClockFormat);
+        addWStr("topBarClockCasing", ToString(topBarClockCasing));
+        addBool("topBarHideAppButtons", topBarHideAppButtons);
+        addBool("topBarHideStart", topBarHideStart);
+        addBool("topBarHideSearch", topBarHideSearch);
+        addBool("topBarHideTaskView", topBarHideTaskView);
+        addBool("topBarHideWidgets", topBarHideWidgets);
+        addWStr("topBarBackdrop", ToString(topBarBackdrop));
+        addBool("topBarAllMonitors", topBarAllMonitors);
+
+        addBool("disableRingBlur", disableRingBlur);
+        addWStr("selectionIndicator", ToString(selectionIndicator));
+
+        addBool("winKeyTrigger", winKeyTrigger);
+        addBool("directSwitchEnabled", directSwitchEnabled);
+        addUInt("directSwitchModifiers", directSwitchModifiers);
+        addUInt("directSwitchVk", directSwitchVk);
+
+        addBool("touchpadPhysLeftClickTrigger", touchpadPhysLeftClickTrigger);
+        addBool("touchpadCornerTrigger", touchpadCornerTrigger);
+        addWStr("touchpadCornerPos", ToString(touchpadCornerPos));
+        addInt("touchpadCornerSizePct", touchpadCornerSizePct);
+
+        addBool("shakeTriggerEnabled", shakeTriggerEnabled);
+        addInt("shakeMinReversals", shakeMinReversals);
+        addInt("shakeWindowMs", shakeWindowMs);
+        addInt("shakeMinAmplitudeDip", shakeMinAmplitudeDip);
+        addBool("shakeSuppressFullscreen", shakeSuppressFullscreen);
+
+        addBool("hotCornerEnabled", hotCornerEnabled);
+        addWStr("hotCornerPos", ToString(hotCornerPos));
+        addWStr("hotCornerAction", ToString(hotCornerAction));
+        addInt("hotCornerPressureThreshold", hotCornerPressureThreshold);
+
+        addBool("fullWorkAreaEnabled", fullWorkAreaEnabled);
+        addBool("fullWorkAreaPillClip", fullWorkAreaPillClip);
+        addBool("fullWorkAreaHotkeys", fullWorkAreaHotkeys);
+
+        addBool("mediaIslandEnabled", mediaIslandEnabled);
+        addWStr("mediaIslandPos", ToString(mediaIslandPos));
+        addBool("mediaIslandHoverExpand", mediaIslandHoverExpand);
+        addBool("mediaIslandHideWhenPaused", mediaIslandHideWhenPaused);
+        addBool("mediaIslandScrollVolume", mediaIslandScrollVolume);
+        addBool("mediaIslandMarquee", mediaIslandMarquee);
+        addWStr("mediaIslandFullscreenMode", ToString(mediaIslandFullscreenMode));
+        addInt("mediaIslandOffsetXPct", mediaIslandOffsetXPct);
 
         out += "  \"pinnedSlots\": [";
         if (!pinnedSlots.empty())

@@ -36,10 +36,12 @@ namespace
     constexpr UINT kTrayCallbackMsg = WM_APP + 100;
     constexpr UINT kTrayIconId = 1;
     constexpr UINT kMenuCmdOpenRing = 1001;
+    constexpr UINT kMenuCmdToggleTopBar = 1002;
     constexpr UINT kMenuCmdSettings = 1003;
     constexpr UINT kMenuCmdReload = 1004;
     constexpr UINT kMenuCmdConfigFolder = 1005;
     constexpr UINT kMenuCmdExit = 1006;
+    constexpr UINT kMenuCmdToggleMediaIsland = 1007;
 
     constexpr wchar_t kSafetyDisabledValue[] = L"InjectionDisabled";
     constexpr wchar_t kCrashCountValue[] = L"AbnormalExplorerExitCount";
@@ -1352,7 +1354,7 @@ namespace
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = kTrayCallbackMsg;
         nid.hIcon = g_runtime.trayIcon;
-        wcscpy_s(nid.szTip, L"WinRings — Radial Switcher");
+        wcscpy_s(nid.szTip, L"WinRings — Radial Switcher & Top Bar");
         if (Shell_NotifyIconW(NIM_ADD, &nid) || Shell_NotifyIconW(NIM_MODIFY, &nid))
         {
             g_runtime.trayAdded = true;
@@ -1407,7 +1409,12 @@ namespace
         HMENU menu = CreatePopupMenu();
         if (!menu)
             return;
+        const SwitcherConfig cfgNow = SwitcherConfig::LoadOrCreate();
         AppendMenuW(menu, MF_STRING, kMenuCmdOpenRing, L"Open Ring Now");
+        AppendMenuW(menu, MF_STRING | (cfgNow.topBarEnabled ? MF_CHECKED : MF_UNCHECKED),
+            kMenuCmdToggleTopBar, L"Toggle Top Minimal Bar");
+        AppendMenuW(menu, MF_STRING | (cfgNow.mediaIslandEnabled ? MF_CHECKED : MF_UNCHECKED),
+            kMenuCmdToggleMediaIsland, L"Show Media Island");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, kMenuCmdSettings, L"Settings...");
         AppendMenuW(menu, MF_STRING, kMenuCmdReload, L"Reload Config");
@@ -1416,10 +1423,33 @@ namespace
         AppendMenuW(menu, MF_STRING, kMenuCmdExit, L"Exit WinRings");
         SetMenuDefaultItem(menu, kMenuCmdSettings, FALSE);
 
-        // Passively open menu cleanly below top-docked taskbar if another tool (e.g. ClearTaskbar) docks it at the top
         UINT menuFlags = TPM_RETURNCMD | TPM_RIGHTBUTTON;
-        HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
-        if (tray)
+        if (cfgNow.topBarEnabled && cfgNow.topBarDockTop)
+        {
+            HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi{ sizeof(mi) };
+            if (GetMonitorInfoW(mon, &mi))
+            {
+                const UINT dpi = GetDpiForWindow(hwnd) >= 72 ? GetDpiForWindow(hwnd) : 96u;
+                const int hDip = (std::clamp)(cfgNow.topBarHeightDip, 24, 52);
+                LONG barBottom = mi.rcMonitor.top + MulDiv(hDip, static_cast<int>(dpi), 96);
+                HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+                RECT rcTray{};
+                if (tray && GetWindowRect(tray, &rcTray) &&
+                    rcTray.top <= mi.rcMonitor.top + 8 &&
+                    rcTray.bottom > mi.rcMonitor.top &&
+                    rcTray.bottom <= mi.rcMonitor.top + 120)
+                {
+                    barBottom = (std::max)(barBottom, rcTray.bottom);
+                }
+                if (pt.y < barBottom + 4)
+                {
+                    pt.y = barBottom + 4;
+                    menuFlags |= TPM_TOPALIGN;
+                }
+            }
+        }
+        else if (HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr))
         {
             HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
             MONITORINFO mi{ sizeof(mi) };
@@ -1448,6 +1478,22 @@ namespace
             if (g_runtime.status == WINRINGS_HOST_STATUS_READY)
                 SendShellCommand(WINRINGS_CMD_TOGGLE_RING);
             break;
+        case kMenuCmdToggleTopBar:
+        {
+            const bool sent = (g_runtime.status == WINRINGS_HOST_STATUS_READY) &&
+                SendShellCommand(WINRINGS_CMD_TOGGLE_TOPBAR);
+            HostDiagLog(L"TrayMenu ToggleTopBar: status=%d ctrl=0x%p sent=%d",
+                static_cast<int>(g_runtime.status), g_runtime.shellControlWindow, sent ? 1 : 0);
+            break;
+        }
+        case kMenuCmdToggleMediaIsland:
+        {
+            const bool sent = (g_runtime.status == WINRINGS_HOST_STATUS_READY) &&
+                SendShellCommand(WINRINGS_CMD_TOGGLE_MEDIA_ISLAND);
+            HostDiagLog(L"TrayMenu ToggleMediaIsland: status=%d ctrl=0x%p sent=%d",
+                static_cast<int>(g_runtime.status), g_runtime.shellControlWindow, sent ? 1 : 0);
+            break;
+        }
         case kMenuCmdSettings:
             LaunchSiblingTools(L"--settings");
             break;
@@ -1514,6 +1560,22 @@ namespace
             case WINRINGS_HOST_CTRL_RELOAD:
                 return (g_runtime.status == WINRINGS_HOST_STATUS_READY &&
                     SendShellCommand(WINRINGS_CMD_RELOAD_CONFIG)) ? TRUE : FALSE;
+            case WINRINGS_HOST_CTRL_TOGGLE_TOPBAR:
+            {
+                const bool ok = (g_runtime.status == WINRINGS_HOST_STATUS_READY) &&
+                    SendShellCommand(WINRINGS_CMD_TOGGLE_TOPBAR);
+                HostDiagLog(L"CLI --toggle-topbar: status=%d ctrl=0x%p sent=%d",
+                    static_cast<int>(g_runtime.status), g_runtime.shellControlWindow, ok ? 1 : 0);
+                return ok ? TRUE : FALSE;
+            }
+            case WINRINGS_HOST_CTRL_TOGGLE_MEDIA_ISLAND:
+            {
+                const bool ok = (g_runtime.status == WINRINGS_HOST_STATUS_READY) &&
+                    SendShellCommand(WINRINGS_CMD_TOGGLE_MEDIA_ISLAND);
+                HostDiagLog(L"CLI --toggle-media-island: status=%d ctrl=0x%p sent=%d",
+                    static_cast<int>(g_runtime.status), g_runtime.shellControlWindow, ok ? 1 : 0);
+                return ok ? TRUE : FALSE;
+            }
             case WINRINGS_HOST_CTRL_QUERY_DETAILS:
             {
                 LRESULT shellBits = 0;
@@ -1547,6 +1609,7 @@ namespace
             AddTrayIcon(window);
             if (!g_runtime.exitPending && !ExplorerProcessStillAlive())
             {
+                g_runtime.retryIndex = 0;
                 g_runtime.activationCommitted = false;
                 BeginConnection(false);
             }
@@ -1654,6 +1717,8 @@ namespace
     {
         Host,
         Toggle,
+        ToggleTopBar,
+        ToggleMediaIsland,
         Exit,
         Status,
         Reload,
@@ -1669,6 +1734,8 @@ namespace
         if (argc == 1) return LaunchCommand::Host;
         if (argc != 2) return LaunchCommand::Invalid;
         if (_wcsicmp(argv[1], L"--toggle") == 0) return LaunchCommand::Toggle;
+        if (_wcsicmp(argv[1], L"--toggle-topbar") == 0) return LaunchCommand::ToggleTopBar;
+        if (_wcsicmp(argv[1], L"--toggle-media-island") == 0) return LaunchCommand::ToggleMediaIsland;
         if (_wcsicmp(argv[1], L"--exit") == 0) return LaunchCommand::Exit;
         if (_wcsicmp(argv[1], L"--status") == 0) return LaunchCommand::Status;
         if (_wcsicmp(argv[1], L"--reload") == 0) return LaunchCommand::Reload;
@@ -1703,6 +1770,8 @@ namespace
         switch (cmd)
         {
         case LaunchCommand::Toggle: ctrl = WINRINGS_HOST_CTRL_TOGGLE; break;
+        case LaunchCommand::ToggleTopBar: ctrl = WINRINGS_HOST_CTRL_TOGGLE_TOPBAR; break;
+        case LaunchCommand::ToggleMediaIsland: ctrl = WINRINGS_HOST_CTRL_TOGGLE_MEDIA_ISLAND; break;
         case LaunchCommand::Exit: ctrl = WINRINGS_HOST_CTRL_EXIT; break;
         case LaunchCommand::Status: ctrl = WINRINGS_HOST_CTRL_QUERY_DETAILS; break;
         case LaunchCommand::Reload: ctrl = WINRINGS_HOST_CTRL_RELOAD; break;
@@ -1721,9 +1790,15 @@ namespace
             const auto hostStatus = static_cast<WinRingsHostStatus>(packed & 0xFFFF);
             const UINT32 bits = (packed >> 16) & 0xFFFF;
             wchar_t msg[256]{};
-            swprintf_s(msg, L"WinRingsHost: %s (ring=%d)",
+            swprintf_s(msg, L"WinRingsHost: %s (ring=%d xaml=%d hook=%d backdrop=%d clock=%d appsHidden=%d media=%d)",
                 StatusText(hostStatus),
-                (bits & WINRINGS_STATE_RING_READY) ? 1 : 0);
+                (bits & WINRINGS_STATE_RING_READY) ? 1 : 0,
+                (bits & WINRINGS_STATE_XAML_ATTACHED) ? 1 : 0,
+                (bits & WINRINGS_STATE_TOPBAR_HOOKED) ? 1 : 0,
+                (bits & WINRINGS_STATE_BACKDROP_ACTIVE) ? 1 : 0,
+                (bits & WINRINGS_STATE_CLOCK_ACTIVE) ? 1 : 0,
+                (bits & WINRINGS_STATE_APPS_HIDDEN) ? 1 : 0,
+                (bits & WINRINGS_STATE_MEDIA_ISLAND_ACTIVE) ? 1 : 0);
             WriteParentConsole(msg);
             return hostStatus == WINRINGS_HOST_STATUS_READY ? 0 : static_cast<int>(hostStatus);
         }

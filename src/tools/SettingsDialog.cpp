@@ -25,6 +25,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../shared/ClockFormat.h"
 #include "../shared/RadialMath.h"
 #include "../shared/RingThemeEngine.h"
 #include "../shared/WinRingsIdentity.h"
@@ -36,12 +37,12 @@ namespace winrings::tools
         using Microsoft::WRL::ComPtr;
 
         constexpr int kWinW = 1040;
-        constexpr int kWinH = 660;
+        constexpr int kWinH = 760;
         constexpr int kSidebarW = 196;
         constexpr int kFooterH = 58;
         constexpr int kPreviewW = 356;
         constexpr int kPreviewBarH = 28;
-        constexpr int kPageCount = 4;
+        constexpr int kPageCount = 5;
 
         // Modern Windows 11 Dark Fluent palette
         constexpr COLORREF kColBg      = RGB(28, 28, 30);
@@ -81,8 +82,53 @@ namespace winrings::tools
             ID_CHK_MENU_KEY,
             ID_CHK_WIN_TAB,
             ID_CHK_ALT_TAB,
+            ID_CHK_WIN_KEY,
+            ID_CHK_DIRECT_SWITCH,
+            ID_CB_DIRECT_SWITCH_KEY,
+            ID_CHK_TP_PHYS_CLICK,
+            ID_CHK_TP_CORNER,
+            ID_CB_TP_CORNER_POS,
+            ID_ED_TP_CORNER_PCT,
+            ID_CHK_SHAKE,
+            ID_ED_SHAKE_REV,
+            ID_ED_SHAKE_WIN,
+            ID_ED_SHAKE_AMP,
+            ID_CHK_SHAKE_FS,
+            ID_CHK_HOT_CORNER,
+            ID_CB_HC_POS,
+            ID_CB_HC_ACT,
+            ID_ED_HC_PRESS,
 
-            // Page 2: Pins & Folders
+            // Page 2: Top Bar & Media Island
+            ID_CHK_TOPBAR_ON = 400,
+            ID_CHK_DOCK_TOP,
+            ID_SLD_BAR_H,
+            ID_ED_BAR_H,
+            ID_CHK_KEEP_FONT,
+            ID_CHK_CLOCK_1L,
+            ID_ED_CLOCK_FMT,
+            ID_CB_CLOCK_CASING,
+            ID_LBL_CLOCK_PREVIEW,
+            ID_CHK_HIDE_APPS,
+            ID_CHK_HIDE_START,
+            ID_CHK_HIDE_SEARCH,
+            ID_CHK_HIDE_TASKVIEW,
+            ID_CHK_HIDE_WIDGETS,
+            ID_CB_BACKDROP,
+            ID_CHK_ALL_MON,
+            ID_CHK_FWA_ON,
+            ID_CHK_FWA_PILL,
+            ID_CHK_FWA_HK,
+            ID_CHK_MEDIA_ON,
+            ID_CB_MEDIA_POS,
+            ID_CB_MEDIA_FS,
+            ID_CHK_MEDIA_EXPAND,
+            ID_CHK_MEDIA_VOL,
+            ID_CHK_MEDIA_HIDE_PAUSED,
+            ID_CHK_MEDIA_MARQUEE,
+            ID_BTN_RESET_MEDIA_POS,
+
+            // Page 3: Pins & Folders
             ID_LB_PINS = 500,
             ID_CB_PIN_KIND,
             ID_ED_PIN_LABEL,
@@ -96,7 +142,7 @@ namespace winrings::tools
             ID_BTN_PIN_UP,
             ID_BTN_PIN_DOWN,
 
-            // Page 3: Advanced
+            // Page 4: Advanced
             ID_ED_RADIUS = 600,
             ID_ED_DEADZONE,
             ID_ED_ICONSIZE,
@@ -109,6 +155,8 @@ namespace winrings::tools
             ID_CHK_SHIFT_CENTER,
             ID_CHK_INCLUDE_UNPINNED,
             ID_ED_MAXSLOTS,
+            ID_CB_SEL_INDICATOR,
+            ID_CHK_NO_BLUR,
         };
 
         struct KeyEntry
@@ -137,15 +185,17 @@ namespace winrings::tools
         constexpr const wchar_t* kPageTitles[kPageCount] = {
             L"Appearance",
             L"Triggers & Input",
+            L"Top Bar & Media Island",
             L"Pins & Folders",
             L"Advanced"
         };
 
         constexpr const wchar_t* kPageSubtitles[kPageCount] = {
             L"Choose a visual style and adjust glass transparency & light/dark tone.",
-            L"Configure mouse button triggers, double-tap switching, and hotkeys.",
+            L"Configure mouse triggers, Win key, touchpad gestures, shake & hot corners.",
+            L"Customize the minimal Windows 11 top bar, FullWorkArea, and Dynamic Island media pill.",
             L"Manage pinned apps, websites, folders, and radial collections.",
-            L"Tune ring geometry, submenu mode, and animations."
+            L"Tune ring geometry, selection highlight, animations, and blur mode."
         };
 
         void EnableDarkAppTheme() noexcept
@@ -1579,7 +1629,7 @@ namespace winrings::tools
 
                 const RingMaterialSpec tc = ComputeRingMaterial(m_config, 1.0);
                 ID2D1Bitmap1* bgBmp = (m_useDesktopScene && m_desktopSceneBmp) ? m_desktopSceneBmp.Get() : m_splitSceneBmp.Get();
-                ComPtr<ID2D1Image> glassImage = BuildPreviewAcrylicEffectImage(bgBmp, tc, fitScale);
+                ComPtr<ID2D1Image> glassImage = m_config.disableRingBlur ? nullptr : BuildPreviewAcrylicEffectImage(bgBmp, tc, fitScale);
 
                 m_previewCtx->SetTarget(m_previewTargetBmp.Get());
                 m_previewCtx->BeginDraw();
@@ -1648,7 +1698,7 @@ namespace winrings::tools
                         13.0f, 13.0f);
                 }
 
-                const bool useNoise = (m_previewNoiseBrush != nullptr && tc.noiseOpacity > 0.002f);
+                const bool useNoise = (!m_config.disableRingBlur && m_previewNoiseBrush != nullptr && tc.noiseOpacity > 0.002f);
                 if (useNoise)
                     m_previewNoiseBrush->SetOpacity(tc.noiseOpacity);
 
@@ -1716,6 +1766,86 @@ namespace winrings::tools
                     : (tc.isLightText ? D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.20f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.72f));
                 if (auto innerGrad = makeRimGrad(c.y - holeR, c.y + holeR, innerTop, innerMid, innerBot))
                     m_previewCtx->DrawEllipse(D2D1::Ellipse(c, holeR + 0.475f, holeR + 0.475f), innerGrad.Get(), 0.95f);
+
+                // Selection highlight preview (SectorWedge / PointerLine)
+                const int previewSlotCnt = static_cast<int>(m_previewSlots.size());
+                const int activeIndSlot = (selIdx >= 0) ? selIdx
+                    : ((previewSlotCnt > 0 && m_config.selectionIndicator != SelectionIndicatorStyle::GlowOnly) ? 0 : -1);
+                if (activeIndSlot >= 0 && activeIndSlot < previewSlotCnt &&
+                    m_config.selectionIndicator != SelectionIndicatorStyle::GlowOnly && m_d2dFactory)
+                {
+                    const double selAngle = GetSlotAngle(activeIndSlot, previewSlotCnt);
+                    const double halfAng = kPi / static_cast<double>((std::max)(previewSlotCnt, 4));
+                    if (m_config.selectionIndicator == SelectionIndicatorStyle::SectorWedge)
+                    {
+                        const double a0 = selAngle - halfAng;
+                        const double a1 = selAngle + halfAng;
+                        const float rOut = outerR - 1.0f;
+                        const float rIn = holeR + 1.0f;
+                        auto ptAt = [&](float r, double ang) -> D2D1_POINT_2F {
+                            return D2D1::Point2F(
+                                c.x + r * static_cast<float>(std::cos(ang)),
+                                c.y + r * static_cast<float>(std::sin(ang)));
+                        };
+                        ComPtr<ID2D1PathGeometry> wedgeGeo;
+                        if (SUCCEEDED(m_d2dFactory->CreatePathGeometry(wedgeGeo.GetAddressOf())) && wedgeGeo)
+                        {
+                            ComPtr<ID2D1GeometrySink> sink;
+                            if (SUCCEEDED(wedgeGeo->Open(sink.GetAddressOf())) && sink)
+                            {
+                                const D2D1_ARC_SIZE arcSz = ((a1 - a0) > kPi) ? D2D1_ARC_SIZE_LARGE : D2D1_ARC_SIZE_SMALL;
+                                sink->BeginFigure(ptAt(rOut, a0), D2D1_FIGURE_BEGIN_FILLED);
+                                sink->AddArc(D2D1::ArcSegment(ptAt(rOut, a1), D2D1::SizeF(rOut, rOut),
+                                    0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, arcSz));
+                                sink->AddLine(ptAt(rIn, a1));
+                                sink->AddArc(D2D1::ArcSegment(ptAt(rIn, a0), D2D1::SizeF(rIn, rIn),
+                                    0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, arcSz));
+                                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                                sink->Close();
+                                D2D1_COLOR_F fc = tc.accent;
+                                fc.a = 0.24f;
+                                if (auto fb = mkBrush(fc))
+                                    m_previewCtx->FillGeometry(wedgeGeo.Get(), fb.Get());
+                            }
+                        }
+                        auto strokeArc = [&](float r, double startAng, double endAng, float width, float alpha) {
+                            ComPtr<ID2D1PathGeometry> arcGeo;
+                            if (SUCCEEDED(m_d2dFactory->CreatePathGeometry(arcGeo.GetAddressOf())) && arcGeo)
+                            {
+                                ComPtr<ID2D1GeometrySink> sink;
+                                if (SUCCEEDED(arcGeo->Open(sink.GetAddressOf())) && sink)
+                                {
+                                    const D2D1_ARC_SIZE arcSz = ((endAng - startAng) > kPi) ? D2D1_ARC_SIZE_LARGE : D2D1_ARC_SIZE_SMALL;
+                                    sink->BeginFigure(ptAt(r, startAng), D2D1_FIGURE_BEGIN_HOLLOW);
+                                    sink->AddArc(D2D1::ArcSegment(ptAt(r, endAng), D2D1::SizeF(r, r),
+                                        0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, arcSz));
+                                    sink->EndFigure(D2D1_FIGURE_END_OPEN);
+                                    sink->Close();
+                                    D2D1_COLOR_F sc = tc.accent;
+                                    sc.a = alpha;
+                                    if (auto sb = mkBrush(sc))
+                                        m_previewCtx->DrawGeometry(arcGeo.Get(), sb.Get(), width);
+                                }
+                            }
+                        };
+                        strokeArc(rOut, a0, a1, 1.6f, 0.92f);
+                        strokeArc(rIn, a0, a1, 1.1f, 0.65f);
+                    }
+                    else if (m_config.selectionIndicator == SelectionIndicatorStyle::PointerLine)
+                    {
+                        const float cs = static_cast<float>(std::cos(selAngle));
+                        const float sn = static_cast<float>(std::sin(selAngle));
+                        const float rStart = holeR + 2.0f;
+                        const float rEnd = (std::max)(rStart + 4.0f, ringR - iconSizePx * 0.56f);
+                        D2D1_COLOR_F lc = tc.accent;
+                        lc.a = 0.92f;
+                        if (auto lb = mkBrush(lc))
+                            m_previewCtx->DrawLine(
+                                D2D1::Point2F(c.x + rStart * cs, c.y + rStart * sn),
+                                D2D1::Point2F(c.x + rEnd * cs, c.y + rEnd * sn),
+                                lb.Get(), 2.0f);
+                    }
+                }
 
                 // Real slots, running dots, hover selection highlight, and real extracted shell icons
                 constexpr float kIdleScale = 0.90f;
@@ -1943,113 +2073,240 @@ namespace winrings::tools
                 m_pageCtrls[0].push_back(m_appearanceCtrl);
 
                 // Page 1: Triggers & Input
-                int y = 84;
-                MakeCtrl(1, L"STATIC", L"Mouse Trigger Button:", 0, px, y + 3, 185, 22, 0);
-                m_cbMouseTrigger = MakeCtrl(1, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 194, y, 240, 160, ID_CB_MOUSE_TRIGGER);
+                int y = 78;
+                MakeCtrl(1, L"STATIC", L"Mouse Trigger:", 0, px, y + 3, 120, 22, 0);
+                m_cbMouseTrigger = MakeCtrl(1, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 124, y, 220, 160, ID_CB_MOUSE_TRIGGER);
                 for (const wchar_t* s : { L"Side Back (XBUTTON1)", L"Side Forward (XBUTTON2)", L"Middle Button", L"Right + Left Chord", L"Disabled" })
                     SendMessageW(m_cbMouseTrigger, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
-                y += 38;
-
-                MakeCtrl(1, L"STATIC", L"Scroll Wheel Behavior:", 0, px, y + 3, 185, 22, 0);
-                m_cbScrollMode = MakeCtrl(1, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 194, y, 240, 140, ID_CB_SCROLL_MODE);
+                MakeCtrl(1, L"STATIC", L"Scroll Wheel:", 0, px + 368, y + 3, 102, 22, 0);
+                m_cbScrollMode = MakeCtrl(1, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 474, y, 220, 140, ID_CB_SCROLL_MODE);
                 for (const wchar_t* s : { L"Cycle Slots or Windows", L"Cycle Submenu Only", L"Disabled" })
                     SendMessageW(m_cbScrollMode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
-                y += 40;
+                y += 34;
 
-                m_chkDoubleTap = MakeCtrl(1, L"BUTTON", L"Double-tap trigger switches immediately to last active window",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 500, 24, ID_CHK_DOUBLE_TAP);
-                y += 36;
+                m_chkDoubleTap = MakeCtrl(1, L"BUTTON", L"Double-tap trigger switches to last window",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 360, 24, ID_CHK_DOUBLE_TAP);
+                MakeCtrl(1, L"STATIC", L"Tap ms:", 0, px + 372, y + 3, 58, 22, 0);
+                m_edTapMs = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 432, y, 60, 24, ID_ED_TAP_MS);
+                MakeCtrl(1, L"STATIC", L"Dbl ms:", 0, px + 510, y + 3, 58, 22, 0);
+                m_edDTapMs = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 570, y, 60, 24, ID_ED_DTAP_MS);
+                y += 34;
 
-                MakeCtrl(1, L"STATIC", L"Quick Tap Threshold (ms):", 0, px, y + 3, 185, 22, 0);
-                m_edTapMs = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 194, y, 80, 24, ID_ED_TAP_MS);
-                MakeCtrl(1, L"STATIC", L"Double-Tap Window (ms):", 0, px + 300, y + 3, 180, 22, 0);
-                m_edDTapMs = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 486, y, 80, 24, ID_ED_DTAP_MS);
-                y += 44;
-
-                m_chkHotkey = MakeCtrl(1, L"BUTTON", L"Enable Keyboard Hotkey Trigger",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 300, 24, ID_CHK_HOTKEY);
-                y += 30;
-                m_chkModAlt = MakeCtrl(1, L"BUTTON", L"Alt", BS_AUTOCHECKBOX | WS_TABSTOP, px + 22, y, 60, 24, ID_CHK_MOD_ALT);
-                m_chkModCtrl = MakeCtrl(1, L"BUTTON", L"Ctrl", BS_AUTOCHECKBOX | WS_TABSTOP, px + 88, y, 60, 24, ID_CHK_MOD_CTRL);
-                m_chkModShift = MakeCtrl(1, L"BUTTON", L"Shift", BS_AUTOCHECKBOX | WS_TABSTOP, px + 154, y, 64, 24, ID_CHK_MOD_SHIFT);
-                m_chkModWin = MakeCtrl(1, L"BUTTON", L"Win", BS_AUTOCHECKBOX | WS_TABSTOP, px + 224, y, 64, 24, ID_CHK_MOD_WIN);
-                MakeCtrl(1, L"STATIC", L"Key:", 0, px + 304, y + 3, 40, 22, 0);
-                m_cbHotkeyVk = MakeCtrl(1, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, px + 348, y, 130, 180, ID_CB_HOTKEY_VK);
+                m_chkHotkey = MakeCtrl(1, L"BUTTON", L"Keyboard Hotkey:",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 160, 24, ID_CHK_HOTKEY);
+                m_chkModAlt = MakeCtrl(1, L"BUTTON", L"Alt", BS_AUTOCHECKBOX | WS_TABSTOP, px + 170, y, 54, 24, ID_CHK_MOD_ALT);
+                m_chkModCtrl = MakeCtrl(1, L"BUTTON", L"Ctrl", BS_AUTOCHECKBOX | WS_TABSTOP, px + 230, y, 56, 24, ID_CHK_MOD_CTRL);
+                m_chkModShift = MakeCtrl(1, L"BUTTON", L"Shift", BS_AUTOCHECKBOX | WS_TABSTOP, px + 292, y, 62, 24, ID_CHK_MOD_SHIFT);
+                m_chkModWin = MakeCtrl(1, L"BUTTON", L"Win", BS_AUTOCHECKBOX | WS_TABSTOP, px + 360, y, 60, 24, ID_CHK_MOD_WIN);
+                MakeCtrl(1, L"STATIC", L"Key:", 0, px + 432, y + 3, 38, 22, 0);
+                m_cbHotkeyVk = MakeCtrl(1, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, px + 474, y, 130, 180, ID_CB_HOTKEY_VK);
                 for (const auto& k : kHotkeyChoices)
                     SendMessageW(m_cbHotkeyVk, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(k.label));
-                y += 42;
+                y += 34;
 
-                m_chkMenuKey = MakeCtrl(1, L"BUTTON", L"Toggle Ring on Menu Key (VK_APPS)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 380, 24, ID_CHK_MENU_KEY);
-                y += 30;
-                m_chkWinTab = MakeCtrl(1, L"BUTTON", L"Optional Shell Interception: Win + Tab", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 380, 24, ID_CHK_WIN_TAB);
-                y += 30;
-                m_chkAltTab = MakeCtrl(1, L"BUTTON", L"Optional Shell Interception: Alt + Tab", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 380, 24, ID_CHK_ALT_TAB);
+                m_chkMenuKey = MakeCtrl(1, L"BUTTON", L"Menu Key (VK_APPS)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 200, 24, ID_CHK_MENU_KEY);
+                m_chkWinTab = MakeCtrl(1, L"BUTTON", L"Intercept Win + Tab", BS_AUTOCHECKBOX | WS_TABSTOP, px + 214, y, 190, 24, ID_CHK_WIN_TAB);
+                m_chkAltTab = MakeCtrl(1, L"BUTTON", L"Intercept Alt + Tab", BS_AUTOCHECKBOX | WS_TABSTOP, px + 418, y, 190, 24, ID_CHK_ALT_TAB);
+                y += 34;
 
-                // Page 2: Pins & Folders (paired with persistent live 1:1 preview on the right)
-                m_lbPins = MakeCtrl(2, L"LISTBOX", L"", LBS_NOTIFY | WS_BORDER | WS_VSCROLL | WS_TABSTOP, px, 78, leftW, 204, ID_LB_PINS);
+                m_chkWinKey = MakeCtrl(1, L"BUTTON", L"Open WinRings on Win Key (replaces Start Menu)",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 420, 24, ID_CHK_WIN_KEY);
+                y += 32;
+
+                m_chkDirectSwitch = MakeCtrl(1, L"BUTTON", L"Direct Window Switch (no popup):",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 275, 24, ID_CHK_DIRECT_SWITCH);
+                m_cbDirectSwitchKey = MakeCtrl(1, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 282, y, 140, 120, ID_CB_DIRECT_SWITCH_KEY);
+                SendMessageW(m_cbDirectSwitchKey, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Alt + F"));
+                SendMessageW(m_cbDirectSwitchKey, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Win + F"));
+                SendMessageW(m_cbDirectSwitchKey, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Alt + Q"));
+                y += 36;
+
+                m_chkTpPhysClick = MakeCtrl(1, L"BUTTON", L"Touchpad Physical Left-Click toggles WinRings",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 420, 24, ID_CHK_TP_PHYS_CLICK);
+                y += 32;
+
+                m_chkTpCorner = MakeCtrl(1, L"BUTTON", L"Touchpad Corner Tap:",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 200, 24, ID_CHK_TP_CORNER);
+                m_cbTpCornerPos = MakeCtrl(1, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 206, y, 128, 100, ID_CB_TP_CORNER_POS);
+                SendMessageW(m_cbTpCornerPos, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Top-Left"));
+                SendMessageW(m_cbTpCornerPos, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Top-Right"));
+                MakeCtrl(1, L"STATIC", L"Size %:", 0, px + 350, y + 3, 56, 22, 0);
+                m_edTpCornerPct = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 410, y, 52, 24, ID_ED_TP_CORNER_PCT);
+                y += 36;
+
+                m_chkShake = MakeCtrl(1, L"BUTTON", L"Mouse Shake Trigger (Aluminium OS):",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 275, 24, ID_CHK_SHAKE);
+                MakeCtrl(1, L"STATIC", L"Rev:", 0, px + 282, y + 3, 36, 22, 0);
+                m_edShakeRev = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 320, y, 44, 24, ID_ED_SHAKE_REV);
+                MakeCtrl(1, L"STATIC", L"Win ms:", 0, px + 378, y + 3, 58, 22, 0);
+                m_edShakeWin = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 440, y, 56, 24, ID_ED_SHAKE_WIN);
+                MakeCtrl(1, L"STATIC", L"DIP:", 0, px + 510, y + 3, 34, 22, 0);
+                m_edShakeAmp = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 548, y, 48, 24, ID_ED_SHAKE_AMP);
+                y += 30;
+                m_chkShakeFs = MakeCtrl(1, L"BUTTON", L"Suppress Shake in Fullscreen / Games",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px + 22, y, 360, 24, ID_CHK_SHAKE_FS);
+                y += 36;
+
+                m_chkHotCorner = MakeCtrl(1, L"BUTTON", L"GNOME Hot Corner (Flick):",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 214, 24, ID_CHK_HOT_CORNER);
+                m_cbHcPos = MakeCtrl(1, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 220, y, 114, 100, ID_CB_HC_POS);
+                SendMessageW(m_cbHcPos, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Top-Left"));
+                SendMessageW(m_cbHcPos, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Top-Right"));
+                m_cbHcAct = MakeCtrl(1, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 344, y, 174, 100, ID_CB_HC_ACT);
+                SendMessageW(m_cbHcAct, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Task View (Win+Tab)"));
+                SendMessageW(m_cbHcAct, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Open WinRings"));
+                MakeCtrl(1, L"STATIC", L"Press:", 0, px + 530, y + 3, 48, 22, 0);
+                m_edHcPress = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 582, y, 58, 24, ID_ED_HC_PRESS);
+
+                // Page 2: Top Bar & Media Island
+                y = 84;
+                m_chkTopBarOn = MakeCtrl(2, L"BUTTON", L"Enable Unified Minimal Top Bar (Windows 11 Shell Integration)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 540, 24, ID_CHK_TOPBAR_ON);
+                y += 30;
+                m_chkDockTop = MakeCtrl(2, L"BUTTON", L"Dock Taskbar to Top Monitor Edge (updates Desktop Work Area)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 540, 24, ID_CHK_DOCK_TOP);
+                y += 36;
+
+                MakeCtrl(2, L"STATIC", L"Bar Height (28-40 DIP):", 0, px, y + 3, 175, 22, 0);
+                m_sldBarH = MakeCtrl(2, TRACKBAR_CLASSW, L"", TBS_AUTOTICKS | WS_TABSTOP, px + 184, y, 200, 28, ID_SLD_BAR_H);
+                SendMessageW(m_sldBarH, TBM_SETRANGE, TRUE, MAKELPARAM(28, 40));
+                m_edBarH = MakeCtrl(2, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 394, y + 2, 56, 24, ID_ED_BAR_H);
+                y += 36;
+
+                m_chkKeepFont = MakeCtrl(2, L"BUTTON", L"Keep Text Font Size Unchanged (Native Taskbar Font Size)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 520, 24, ID_CHK_KEEP_FONT);
+                y += 30;
+                m_chkClock1L = MakeCtrl(2, L"BUTTON", L"Single-Line Compact Clock (replaces two-line date/time)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, 500, 24, ID_CHK_CLOCK_1L);
+                y += 34;
+
+                MakeCtrl(2, L"STATIC", L"Clock Format:", 0, px, y + 3, 120, 22, 0);
+                m_edClockFmt = MakeCtrl(2, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 128, y, 220, 24, ID_ED_CLOCK_FMT);
+                MakeCtrl(2, L"STATIC", L"Casing:", 0, px + 362, y + 3, 60, 22, 0);
+                m_cbClockCasing = MakeCtrl(2, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 426, y, 160, 140, ID_CB_CLOCK_CASING);
+                for (const wchar_t* c : { L"CompactLower", L"Default", L"Lowercase", L"Uppercase" })
+                    SendMessageW(m_cbClockCasing, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(c));
+                y += 34;
+
+                MakeCtrl(2, L"STATIC", L"Clock Preview:", 0, px, y + 3, 120, 22, 0);
+                m_lblClockPreview = MakeCtrl(2, L"STATIC", L"", SS_SUNKEN | SS_CENTERIMAGE, px + 128, y, 280, 26, ID_LBL_CLOCK_PREVIEW);
+                SendMessageW(m_lblClockPreview, WM_SETFONT, reinterpret_cast<WPARAM>(m_boldFont), TRUE);
+                y += 38;
+
+                MakeCtrl(2, L"STATIC", L"Taskbar Chrome Elements:", 0, px, y, 240, 22, 0);
+                y += 26;
+                m_chkHideApps = MakeCtrl(2, L"BUTTON", L"Hide Taskbar App Buttons (preserve System Tray)", BS_AUTOCHECKBOX | WS_TABSTOP, px + 16, y, 360, 22, ID_CHK_HIDE_APPS);
+                m_chkHideStart = MakeCtrl(2, L"BUTTON", L"Hide Start Button", BS_AUTOCHECKBOX | WS_TABSTOP, px + 394, y, 180, 22, ID_CHK_HIDE_START);
+                y += 28;
+                m_chkHideSearch = MakeCtrl(2, L"BUTTON", L"Hide Search", BS_AUTOCHECKBOX | WS_TABSTOP, px + 16, y, 150, 22, ID_CHK_HIDE_SEARCH);
+                m_chkHideTaskView = MakeCtrl(2, L"BUTTON", L"Hide Task View", BS_AUTOCHECKBOX | WS_TABSTOP, px + 186, y, 160, 22, ID_CHK_HIDE_TASKVIEW);
+                m_chkHideWidgets = MakeCtrl(2, L"BUTTON", L"Hide Widgets", BS_AUTOCHECKBOX | WS_TABSTOP, px + 394, y, 170, 22, ID_CHK_HIDE_WIDGETS);
+                y += 36;
+
+                MakeCtrl(2, L"STATIC", L"Backdrop Style:", 0, px, y + 3, 120, 22, 0);
+                m_cbBackdrop = MakeCtrl(2, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 128, y, 160, 120, ID_CB_BACKDROP);
+                for (const wchar_t* b : { L"Clear", L"Frosted", L"Native" })
+                    SendMessageW(m_cbBackdrop, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(b));
+                m_chkAllMon = MakeCtrl(2, L"BUTTON", L"Apply to All Monitors", BS_AUTOCHECKBOX | WS_TABSTOP, px + 320, y + 2, 220, 24, ID_CHK_ALL_MON);
+                y += 40;
+
+                MakeCtrl(2, L"STATIC", L"FullWorkArea Integration (Windows 11 26H2+):", 0, px, y, 360, 22, 0);
+                y += 26;
+                m_chkFwaOn = MakeCtrl(2, L"BUTTON", L"Extend maximized apps behind Top Bar", BS_AUTOCHECKBOX | WS_TABSTOP, px + 16, y, 310, 22, ID_CHK_FWA_ON);
+                m_chkFwaPill = MakeCtrl(2, L"BUTTON", L"Click-Through Pill Clipping", BS_AUTOCHECKBOX | WS_TABSTOP, px + 338, y, 220, 22, ID_CHK_FWA_PILL);
+                m_chkFwaHk = MakeCtrl(2, L"BUTTON", L"Win+` Hotkey", BS_AUTOCHECKBOX | WS_TABSTOP, px + 570, y, 140, 22, ID_CHK_FWA_HK);
+                y += 34;
+
+                MakeCtrl(2, L"STATIC", L"Dynamic Island Media Pill (Top Bar, Alt+Drag to move):", 0, px, y, 420, 22, 0);
+                y += 26;
+                m_chkMediaOn = MakeCtrl(2, L"BUTTON", L"Enable Media Pill (fits bar height)", BS_AUTOCHECKBOX | WS_TABSTOP, px + 16, y, 278, 22, ID_CHK_MEDIA_ON);
+                MakeCtrl(2, L"STATIC", L"Position:", 0, px + 304, y + 2, 64, 22, 0);
+                m_cbMediaPos = MakeCtrl(2, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 370, y - 1, 110, 120, ID_CB_MEDIA_POS);
+                for (const wchar_t* p : { L"Center", L"Left", L"Near Tray" })
+                    SendMessageW(m_cbMediaPos, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(p));
+                MakeCtrl(2, L"STATIC", L"Fullscreen:", 0, px + 492, y + 2, 76, 22, 0);
+                m_cbMediaFs = MakeCtrl(2, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 570, y - 1, 170, 120, ID_CB_MEDIA_FS);
+                for (const wchar_t* fs : { L"Sync with Taskbar", L"Games Only", L"Never Hide" })
+                    SendMessageW(m_cbMediaFs, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(fs));
+                y += 30;
+                m_chkMediaExpand = MakeCtrl(2, L"BUTTON", L"Expand Card on Hover", BS_AUTOCHECKBOX | WS_TABSTOP, px + 16, y, 185, 22, ID_CHK_MEDIA_EXPAND);
+                m_chkMediaVol = MakeCtrl(2, L"BUTTON", L"Scroll Wheel Volume", BS_AUTOCHECKBOX | WS_TABSTOP, px + 212, y, 175, 22, ID_CHK_MEDIA_VOL);
+                m_chkMediaHidePaused = MakeCtrl(2, L"BUTTON", L"Hide When Paused", BS_AUTOCHECKBOX | WS_TABSTOP, px + 398, y, 165, 22, ID_CHK_MEDIA_HIDE_PAUSED);
+                m_chkMediaMarquee = MakeCtrl(2, L"BUTTON", L"Scroll Long Titles", BS_AUTOCHECKBOX | WS_TABSTOP, px + 575, y, 170, 22, ID_CHK_MEDIA_MARQUEE);
+                y += 32;
+                m_btnResetMediaPos = MakeCtrl(2, L"BUTTON", L"Reset Island Position", BS_OWNERDRAW | WS_TABSTOP, px + 16, y, 180, 28, ID_BTN_RESET_MEDIA_POS);
+
+                // Page 3: Pins & Folders (paired with persistent live 1:1 preview on the right)
+                m_lbPins = MakeCtrl(3, L"LISTBOX", L"", LBS_NOTIFY | WS_BORDER | WS_VSCROLL | WS_TABSTOP, px, 78, leftW, 204, ID_LB_PINS);
                 int py = 294;
-                MakeCtrl(2, L"STATIC", L"Kind:", 0, px, py + 3, 52, 22, 0);
-                m_cbPinKind = MakeCtrl(2, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 56, py, 146, 160, ID_CB_PIN_KIND);
+                MakeCtrl(3, L"STATIC", L"Kind:", 0, px, py + 3, 52, 22, 0);
+                m_cbPinKind = MakeCtrl(3, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 56, py, 146, 160, ID_CB_PIN_KIND);
                 for (const wchar_t* k : { L"App", L"Website", L"File", L"Folder", L"Script", L"Collection", L"RecycleBin" })
                     SendMessageW(m_cbPinKind, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(k));
-                MakeCtrl(2, L"STATIC", L"Max Items:", 0, px + 220, py + 3, 82, 22, 0);
-                m_edPinFolderMax = MakeCtrl(2, L"EDIT", L"8", WS_BORDER | WS_TABSTOP, px + 306, py, 56, 24, ID_ED_PIN_FOLDER_MAX);
+                MakeCtrl(3, L"STATIC", L"Max Items:", 0, px + 220, py + 3, 82, 22, 0);
+                m_edPinFolderMax = MakeCtrl(3, L"EDIT", L"8", WS_BORDER | WS_TABSTOP, px + 306, py, 56, 24, ID_ED_PIN_FOLDER_MAX);
                 py += 36;
 
-                MakeCtrl(2, L"STATIC", L"Label:", 0, px, py + 3, 52, 22, 0);
-                m_edPinLabel = MakeCtrl(2, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 56, py, leftW - 56, 24, ID_ED_PIN_LABEL);
+                MakeCtrl(3, L"STATIC", L"Label:", 0, px, py + 3, 52, 22, 0);
+                m_edPinLabel = MakeCtrl(3, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 56, py, leftW - 56, 24, ID_ED_PIN_LABEL);
                 py += 36;
 
-                MakeCtrl(2, L"STATIC", L"Path:", 0, px, py + 3, 52, 22, 0);
-                m_edPinPath = MakeCtrl(2, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 56, py, leftW - 216, 24, ID_ED_PIN_PATH);
-                MakeCtrl(2, L"BUTTON", L"File...", BS_OWNERDRAW | WS_TABSTOP, px + leftW - 152, py - 1, 72, 28, ID_BTN_BROWSE_FILE);
-                MakeCtrl(2, L"BUTTON", L"Folder...", BS_OWNERDRAW | WS_TABSTOP, px + leftW - 74, py - 1, 74, 28, ID_BTN_BROWSE_DIR);
+                MakeCtrl(3, L"STATIC", L"Path:", 0, px, py + 3, 52, 22, 0);
+                m_edPinPath = MakeCtrl(3, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 56, py, leftW - 216, 24, ID_ED_PIN_PATH);
+                MakeCtrl(3, L"BUTTON", L"File...", BS_OWNERDRAW | WS_TABSTOP, px + leftW - 152, py - 1, 72, 28, ID_BTN_BROWSE_FILE);
+                MakeCtrl(3, L"BUTTON", L"Folder...", BS_OWNERDRAW | WS_TABSTOP, px + leftW - 74, py - 1, 74, 28, ID_BTN_BROWSE_DIR);
                 py += 40;
 
                 const int btnW3 = (leftW - 20) / 3;
-                MakeCtrl(2, L"BUTTON", L"Add Slot", BS_OWNERDRAW | WS_TABSTOP, px, py, btnW3, 30, ID_BTN_PIN_ADD);
-                MakeCtrl(2, L"BUTTON", L"Update", BS_OWNERDRAW | WS_TABSTOP, px + btnW3 + 10, py, btnW3, 30, ID_BTN_PIN_UPDATE);
-                MakeCtrl(2, L"BUTTON", L"Remove", BS_OWNERDRAW | WS_TABSTOP, px + (btnW3 + 10) * 2, py, btnW3, 30, ID_BTN_PIN_REMOVE);
+                MakeCtrl(3, L"BUTTON", L"Add Slot", BS_OWNERDRAW | WS_TABSTOP, px, py, btnW3, 30, ID_BTN_PIN_ADD);
+                MakeCtrl(3, L"BUTTON", L"Update", BS_OWNERDRAW | WS_TABSTOP, px + btnW3 + 10, py, btnW3, 30, ID_BTN_PIN_UPDATE);
+                MakeCtrl(3, L"BUTTON", L"Remove", BS_OWNERDRAW | WS_TABSTOP, px + (btnW3 + 10) * 2, py, btnW3, 30, ID_BTN_PIN_REMOVE);
                 py += 38;
-                MakeCtrl(2, L"BUTTON", L"Move Up", BS_OWNERDRAW | WS_TABSTOP, px, py, btnW3, 30, ID_BTN_PIN_UP);
-                MakeCtrl(2, L"BUTTON", L"Move Down", BS_OWNERDRAW | WS_TABSTOP, px + btnW3 + 10, py, btnW3, 30, ID_BTN_PIN_DOWN);
+                MakeCtrl(3, L"BUTTON", L"Move Up", BS_OWNERDRAW | WS_TABSTOP, px, py, btnW3, 30, ID_BTN_PIN_UP);
+                MakeCtrl(3, L"BUTTON", L"Move Down", BS_OWNERDRAW | WS_TABSTOP, px + btnW3 + 10, py, btnW3, 30, ID_BTN_PIN_DOWN);
 
-                // Page 3: Advanced (paired with persistent live 1:1 preview on the right)
+                // Page 4: Advanced (paired with persistent live 1:1 preview on the right)
                 y = 80;
                 const int col2X = px + leftW / 2 + 6;
-                MakeCtrl(3, L"STATIC", L"Ring Radius:", 0, px, y + 3, 108, 22, 0);
-                m_edRadius = MakeCtrl(3, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 112, y, 74, 24, ID_ED_RADIUS);
-                MakeCtrl(3, L"STATIC", L"Deadzone:", 0, col2X, y + 3, 98, 22, 0);
-                m_edDeadzone = MakeCtrl(3, L"EDIT", L"", WS_BORDER | WS_TABSTOP, col2X + 102, y, 74, 24, ID_ED_DEADZONE);
+                MakeCtrl(4, L"STATIC", L"Ring Radius:", 0, px, y + 3, 108, 22, 0);
+                m_edRadius = MakeCtrl(4, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 112, y, 74, 24, ID_ED_RADIUS);
+                MakeCtrl(4, L"STATIC", L"Deadzone:", 0, col2X, y + 3, 98, 22, 0);
+                m_edDeadzone = MakeCtrl(4, L"EDIT", L"", WS_BORDER | WS_TABSTOP, col2X + 102, y, 74, 24, ID_ED_DEADZONE);
                 y += 36;
 
-                MakeCtrl(3, L"STATIC", L"Icon Size:", 0, px, y + 3, 108, 22, 0);
-                m_edIconSize = MakeCtrl(3, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 112, y, 74, 24, ID_ED_ICONSIZE);
-                MakeCtrl(3, L"STATIC", L"Preview Scale:", 0, col2X, y + 3, 98, 22, 0);
-                m_edThumbScale = MakeCtrl(3, L"EDIT", L"", WS_BORDER | WS_TABSTOP, col2X + 102, y, 74, 24, ID_ED_THUMBSCALE);
+                MakeCtrl(4, L"STATIC", L"Icon Size:", 0, px, y + 3, 108, 22, 0);
+                m_edIconSize = MakeCtrl(4, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 112, y, 74, 24, ID_ED_ICONSIZE);
+                MakeCtrl(4, L"STATIC", L"Preview Scale:", 0, col2X, y + 3, 98, 22, 0);
+                m_edThumbScale = MakeCtrl(4, L"EDIT", L"", WS_BORDER | WS_TABSTOP, col2X + 102, y, 74, 24, ID_ED_THUMBSCALE);
                 y += 36;
 
-                MakeCtrl(3, L"STATIC", L"Max Slots:", 0, px, y + 3, 108, 22, 0);
-                m_edMaxSlots = MakeCtrl(3, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 112, y, 74, 24, ID_ED_MAXSLOTS);
-                MakeCtrl(3, L"STATIC", L"Accent Hex:", 0, col2X, y + 3, 98, 22, 0);
-                m_edAccent = MakeCtrl(3, L"EDIT", L"", WS_BORDER | WS_TABSTOP, col2X + 102, y, 86, 24, ID_ED_ACCENT);
+                MakeCtrl(4, L"STATIC", L"Max Slots:", 0, px, y + 3, 108, 22, 0);
+                m_edMaxSlots = MakeCtrl(4, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 112, y, 74, 24, ID_ED_MAXSLOTS);
+                MakeCtrl(4, L"STATIC", L"Accent Hex:", 0, col2X, y + 3, 98, 22, 0);
+                m_edAccent = MakeCtrl(4, L"EDIT", L"", WS_BORDER | WS_TABSTOP, col2X + 102, y, 86, 24, ID_ED_ACCENT);
                 y += 38;
 
-                MakeCtrl(3, L"STATIC", L"Window View:", 0, px, y + 3, 108, 22, 0);
-                m_cbWinView = MakeCtrl(3, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 112, y, leftW - 112, 120, ID_CB_WINVIEW);
+                MakeCtrl(4, L"STATIC", L"Window View:", 0, px, y + 3, 108, 22, 0);
+                m_cbWinView = MakeCtrl(4, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 112, y, leftW - 112, 120, ID_CB_WINVIEW);
                 SendMessageW(m_cbWinView, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"OuterArc (Thumbnails)"));
                 SendMessageW(m_cbWinView, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TitleColumn"));
                 y += 40;
 
-                m_chkNoAnim = MakeCtrl(3, L"BUTTON", L"Disable Opening Animation (Frame-0 Instant)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_NO_ANIM);
+                m_chkNoAnim = MakeCtrl(4, L"BUTTON", L"Disable Opening Animation (Frame-0 Instant)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_NO_ANIM);
                 y += 28;
-                m_chkFanOne = MakeCtrl(3, L"BUTTON", L"Fan out live DWM preview even for 1 window", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_FANOUT_ONE);
+                m_chkFanOne = MakeCtrl(4, L"BUTTON", L"Fan out live DWM preview even for 1 window", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_FANOUT_ONE);
                 y += 28;
-                m_chkPtrFollow = MakeCtrl(3, L"BUTTON", L"Pointer Follow (160ms glide on focus switch)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_PTR_FOLLOW);
+                m_chkPtrFollow = MakeCtrl(4, L"BUTTON", L"Pointer Follow (160ms glide on focus switch)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_PTR_FOLLOW);
                 y += 28;
-                m_chkShiftCenter = MakeCtrl(3, L"BUTTON", L"Shift-Center overlay & window on active monitor", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_SHIFT_CENTER);
+                m_chkShiftCenter = MakeCtrl(4, L"BUTTON", L"Shift-Center overlay & window on active monitor", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_SHIFT_CENTER);
                 y += 28;
-                m_chkIncludeUnpinned = MakeCtrl(3, L"BUTTON", L"Include unpinned running apps in Ring slots", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_INCLUDE_UNPINNED);
+                m_chkIncludeUnpinned = MakeCtrl(4, L"BUTTON", L"Include unpinned running apps in Ring slots", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_INCLUDE_UNPINNED);
+                y += 36;
+
+                MakeCtrl(4, L"STATIC", L"Highlight:", 0, px, y + 3, 108, 22, 0);
+                m_cbSelIndicator = MakeCtrl(4, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, px + 112, y, leftW - 112, 120, ID_CB_SEL_INDICATOR);
+                SendMessageW(m_cbSelIndicator, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Glow Only"));
+                SendMessageW(m_cbSelIndicator, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Sector Wedge (v1 Blue)"));
+                SendMessageW(m_cbSelIndicator, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Pointer Line"));
+                y += 36;
+
+                m_chkNoBlur = MakeCtrl(4, L"BUTTON", L"Disable Acrylic Blur (Ultra-Fast Mode)", BS_AUTOCHECKBOX | WS_TABSTOP, px, y, leftW, 24, ID_CHK_NO_BLUR);
 
                 // Persistent Footer Bar
                 const int fy = ch - kFooterH + 13;
@@ -2081,7 +2338,7 @@ namespace winrings::tools
                 }
                 if (m_ringCanvas)
                 {
-                    const bool showPreview = (index == 0 || index == 2 || index == 3);
+                    const bool showPreview = (index == 0 || index == 3 || index == 4);
                     ShowWindow(m_ringCanvas, showPreview ? SW_SHOW : SW_HIDE);
                     if (showPreview)
                         InvalidateRect(m_ringCanvas, nullptr, FALSE);
@@ -2119,6 +2376,29 @@ namespace winrings::tools
                 SendMessageW(m_chkWinTab, BM_SETCHECK, m_config.interceptWinTab ? BST_CHECKED : BST_UNCHECKED, 0);
                 SendMessageW(m_chkAltTab, BM_SETCHECK, m_config.interceptAltTab ? BST_CHECKED : BST_UNCHECKED, 0);
 
+                SendMessageW(m_chkWinKey, BM_SETCHECK, m_config.winKeyTrigger ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkDirectSwitch, BM_SETCHECK, m_config.directSwitchEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                int dsIdx = 0;
+                if ((m_config.directSwitchModifiers & MOD_WIN) && m_config.directSwitchVk == 'F') dsIdx = 1;
+                else if (m_config.directSwitchVk == 'Q') dsIdx = 2;
+                SendMessageW(m_cbDirectSwitchKey, CB_SETCURSEL, static_cast<WPARAM>(dsIdx), 0);
+
+                SendMessageW(m_chkTpPhysClick, BM_SETCHECK, m_config.touchpadPhysLeftClickTrigger ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkTpCorner, BM_SETCHECK, m_config.touchpadCornerTrigger ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_cbTpCornerPos, CB_SETCURSEL, static_cast<WPARAM>(static_cast<int>(m_config.touchpadCornerPos)), 0);
+                SetWindowTextW(m_edTpCornerPct, std::to_wstring(m_config.touchpadCornerSizePct).c_str());
+
+                SendMessageW(m_chkShake, BM_SETCHECK, m_config.shakeTriggerEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                SetWindowTextW(m_edShakeRev, std::to_wstring(m_config.shakeMinReversals).c_str());
+                SetWindowTextW(m_edShakeWin, std::to_wstring(m_config.shakeWindowMs).c_str());
+                SetWindowTextW(m_edShakeAmp, std::to_wstring(m_config.shakeMinAmplitudeDip).c_str());
+                SendMessageW(m_chkShakeFs, BM_SETCHECK, m_config.shakeSuppressFullscreen ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                SendMessageW(m_chkHotCorner, BM_SETCHECK, m_config.hotCornerEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_cbHcPos, CB_SETCURSEL, static_cast<WPARAM>(static_cast<int>(m_config.hotCornerPos)), 0);
+                SendMessageW(m_cbHcAct, CB_SETCURSEL, static_cast<WPARAM>(static_cast<int>(m_config.hotCornerAction)), 0);
+                SetWindowTextW(m_edHcPress, std::to_wstring(m_config.hotCornerPressureThreshold).c_str());
+
                 SetWindowTextW(m_edAccent, m_config.accentColor.c_str());
                 wchar_t num[32]{};
                 swprintf_s(num, L"%.0f", m_config.ringRadiusDip);
@@ -2137,8 +2417,42 @@ namespace winrings::tools
                 SendMessageW(m_chkShiftCenter, BM_SETCHECK, m_config.shiftCenterOnActiveMonitor ? BST_CHECKED : BST_UNCHECKED, 0);
                 SendMessageW(m_chkIncludeUnpinned, BM_SETCHECK, m_config.includeUnpinnedRunningApps ? BST_CHECKED : BST_UNCHECKED, 0);
                 SetWindowTextW(m_edMaxSlots, std::to_wstring(m_config.maxSlots).c_str());
+                SendMessageW(m_cbSelIndicator, CB_SETCURSEL, static_cast<WPARAM>(static_cast<int>(m_config.selectionIndicator)), 0);
+                SendMessageW(m_chkNoBlur, BM_SETCHECK, m_config.disableRingBlur ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                SendMessageW(m_chkTopBarOn, BM_SETCHECK, m_config.topBarEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkDockTop, BM_SETCHECK, m_config.topBarDockTop ? BST_CHECKED : BST_UNCHECKED, 0);
+                const int barH = (std::clamp)(m_config.topBarHeightDip, 28, 40);
+                SendMessageW(m_sldBarH, TBM_SETPOS, TRUE, static_cast<LPARAM>(barH));
+                SetWindowTextW(m_edBarH, std::to_wstring(barH).c_str());
+                SendMessageW(m_chkKeepFont, BM_SETCHECK, m_config.topBarPreserveFontSize ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkClock1L, BM_SETCHECK, m_config.topBarClockSingleLine ? BST_CHECKED : BST_UNCHECKED, 0);
+                SetWindowTextW(m_edClockFmt, m_config.topBarClockFormat.c_str());
+                SendMessageW(m_cbClockCasing, CB_SETCURSEL, static_cast<WPARAM>(static_cast<int>(m_config.topBarClockCasing)), 0);
+
+                SendMessageW(m_chkHideApps, BM_SETCHECK, m_config.topBarHideAppButtons ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkHideStart, BM_SETCHECK, m_config.topBarHideStart ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkHideSearch, BM_SETCHECK, m_config.topBarHideSearch ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkHideTaskView, BM_SETCHECK, m_config.topBarHideTaskView ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkHideWidgets, BM_SETCHECK, m_config.topBarHideWidgets ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_cbBackdrop, CB_SETCURSEL, static_cast<WPARAM>(static_cast<int>(m_config.topBarBackdrop)), 0);
+                SendMessageW(m_chkAllMon, BM_SETCHECK, m_config.topBarAllMonitors ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                SendMessageW(m_chkFwaOn, BM_SETCHECK, m_config.fullWorkAreaEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkFwaPill, BM_SETCHECK, m_config.fullWorkAreaPillClip ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkFwaHk, BM_SETCHECK, m_config.fullWorkAreaHotkeys ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkMediaOn, BM_SETCHECK, m_config.mediaIslandEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_cbMediaPos, CB_SETCURSEL, static_cast<WPARAM>(static_cast<int>(m_config.mediaIslandPos)), 0);
+                SendMessageW(m_cbMediaFs, CB_SETCURSEL, static_cast<WPARAM>(static_cast<int>(m_config.mediaIslandFullscreenMode)), 0);
+                SendMessageW(m_chkMediaExpand, BM_SETCHECK, m_config.mediaIslandHoverExpand ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkMediaVol, BM_SETCHECK, m_config.mediaIslandScrollVolume ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkMediaHidePaused, BM_SETCHECK, m_config.mediaIslandHideWhenPaused ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkMediaMarquee, BM_SETCHECK, m_config.mediaIslandMarquee ? BST_CHECKED : BST_UNCHECKED, 0);
+                if (m_btnResetMediaPos)
+                    EnableWindow(m_btnResetMediaPos, m_config.mediaIslandOffsetXPct >= 0 ? TRUE : FALSE);
 
                 RefreshPinsList();
+                UpdateClockPreview();
                 RebuildPreviewSlots();
                 if (m_appearanceCtrl) InvalidateRect(m_appearanceCtrl, nullptr, FALSE);
                 if (m_ringCanvas) InvalidateRect(m_ringCanvas, nullptr, FALSE);
@@ -2158,6 +2472,17 @@ namespace winrings::tools
                 SendMessageW(m_cbPinKind, CB_SETCURSEL, 0, 0);
             }
 
+            void UpdateClockPreview()
+            {
+                const std::wstring fmt = GetText(m_edClockFmt);
+                const int cIdx = static_cast<int>(SendMessageW(m_cbClockCasing, CB_GETCURSEL, 0, 0));
+                const ClockCasing casing = (cIdx >= 0 && cIdx <= 3) ? static_cast<ClockCasing>(cIdx) : ClockCasing::CompactLower;
+                SYSTEMTIME st{};
+                GetLocalTime(&st);
+                const std::wstring text = FormatClock(st, fmt, casing);
+                SetWindowTextW(m_lblClockPreview, text.c_str());
+            }
+
             void SyncPreviewRelevantFields()
             {
                 const std::wstring acc = GetText(m_edAccent);
@@ -2168,6 +2493,9 @@ namespace winrings::tools
                 m_config.iconSizeDip = (std::clamp)(ParseDoubleOr(GetText(m_edIconSize), m_config.iconSizeDip), 24.0, 72.0);
                 m_config.maxSlots = (std::clamp)(ParseIntOr(GetText(m_edMaxSlots), m_config.maxSlots), 4, 24);
                 m_config.includeUnpinnedRunningApps = (SendMessageW(m_chkIncludeUnpinned, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                const int selInd = static_cast<int>(SendMessageW(m_cbSelIndicator, CB_GETCURSEL, 0, 0));
+                m_config.selectionIndicator = static_cast<SelectionIndicatorStyle>((std::clamp)(selInd, 0, 2));
+                m_config.disableRingBlur = (SendMessageW(m_chkNoBlur, BM_GETCHECK, 0, 0) == BST_CHECKED);
                 RebuildPreviewSlots();
                 if (m_ringCanvas)
                     InvalidateRect(m_ringCanvas, nullptr, FALSE);
@@ -2199,6 +2527,29 @@ namespace winrings::tools
                 m_config.interceptWinTab = isChk(m_chkWinTab);
                 m_config.interceptAltTab = isChk(m_chkAltTab);
 
+                m_config.winKeyTrigger = isChk(m_chkWinKey);
+                m_config.directSwitchEnabled = isChk(m_chkDirectSwitch);
+                const int dsIdx = cbIdx(m_cbDirectSwitchKey, 2);
+                if (dsIdx == 1) { m_config.directSwitchModifiers = MOD_WIN; m_config.directSwitchVk = 'F'; }
+                else if (dsIdx == 2) { m_config.directSwitchModifiers = MOD_ALT; m_config.directSwitchVk = 'Q'; }
+                else { m_config.directSwitchModifiers = MOD_ALT; m_config.directSwitchVk = 'F'; }
+
+                m_config.touchpadPhysLeftClickTrigger = isChk(m_chkTpPhysClick);
+                m_config.touchpadCornerTrigger = isChk(m_chkTpCorner);
+                m_config.touchpadCornerPos = static_cast<TouchpadCornerPos>(cbIdx(m_cbTpCornerPos, 1));
+                m_config.touchpadCornerSizePct = (std::clamp)(ParseIntOr(GetText(m_edTpCornerPct), 18), 10, 30);
+
+                m_config.shakeTriggerEnabled = isChk(m_chkShake);
+                m_config.shakeMinReversals = (std::clamp)(ParseIntOr(GetText(m_edShakeRev), 4), 3, 8);
+                m_config.shakeWindowMs = (std::clamp)(ParseIntOr(GetText(m_edShakeWin), 400), 200, 800);
+                m_config.shakeMinAmplitudeDip = (std::clamp)(ParseIntOr(GetText(m_edShakeAmp), 32), 15, 80);
+                m_config.shakeSuppressFullscreen = isChk(m_chkShakeFs);
+
+                m_config.hotCornerEnabled = isChk(m_chkHotCorner);
+                m_config.hotCornerPos = static_cast<HotCornerPos>(cbIdx(m_cbHcPos, 1));
+                m_config.hotCornerAction = static_cast<HotCornerAction>(cbIdx(m_cbHcAct, 1));
+                m_config.hotCornerPressureThreshold = (std::clamp)(ParseIntOr(GetText(m_edHcPress), 140), 50, 400);
+
                 m_config.glassLevel = (std::clamp)(m_config.glassLevel, 0, 100);
                 m_config.lightDarkMode = (std::clamp)(m_config.lightDarkMode, 0, 100);
 
@@ -2215,6 +2566,35 @@ namespace winrings::tools
                 m_config.shiftCenterOnActiveMonitor = isChk(m_chkShiftCenter);
                 m_config.includeUnpinnedRunningApps = isChk(m_chkIncludeUnpinned);
                 m_config.maxSlots = (std::clamp)(ParseIntOr(GetText(m_edMaxSlots), 14), 4, 24);
+                m_config.selectionIndicator = static_cast<SelectionIndicatorStyle>(cbIdx(m_cbSelIndicator, 2));
+                m_config.disableRingBlur = isChk(m_chkNoBlur);
+
+                m_config.topBarEnabled = isChk(m_chkTopBarOn);
+                m_config.topBarDockTop = isChk(m_chkDockTop);
+                m_config.topBarHeightDip = (std::clamp)(ParseIntOr(GetText(m_edBarH), 30), 28, 40);
+                m_config.topBarPreserveFontSize = isChk(m_chkKeepFont);
+                m_config.topBarClockSingleLine = isChk(m_chkClock1L);
+                m_config.topBarClockFormat = GetText(m_edClockFmt);
+                if (m_config.topBarClockFormat.empty()) m_config.topBarClockFormat = L"ddd d MMM  h:mm tt";
+                m_config.topBarClockCasing = static_cast<ClockCasing>(cbIdx(m_cbClockCasing, 3));
+                m_config.topBarHideAppButtons = isChk(m_chkHideApps);
+                m_config.topBarHideStart = isChk(m_chkHideStart);
+                m_config.topBarHideSearch = isChk(m_chkHideSearch);
+                m_config.topBarHideTaskView = isChk(m_chkHideTaskView);
+                m_config.topBarHideWidgets = isChk(m_chkHideWidgets);
+                m_config.topBarBackdrop = static_cast<TopBarBackdrop>(cbIdx(m_cbBackdrop, 2));
+                m_config.topBarAllMonitors = isChk(m_chkAllMon);
+
+                m_config.fullWorkAreaEnabled = isChk(m_chkFwaOn);
+                m_config.fullWorkAreaPillClip = isChk(m_chkFwaPill);
+                m_config.fullWorkAreaHotkeys = isChk(m_chkFwaHk);
+                m_config.mediaIslandEnabled = isChk(m_chkMediaOn);
+                m_config.mediaIslandPos = static_cast<MediaIslandPos>(cbIdx(m_cbMediaPos, 2));
+                m_config.mediaIslandFullscreenMode = static_cast<MediaIslandFullscreenMode>(cbIdx(m_cbMediaFs, 2));
+                m_config.mediaIslandHoverExpand = isChk(m_chkMediaExpand);
+                m_config.mediaIslandScrollVolume = isChk(m_chkMediaVol);
+                m_config.mediaIslandHideWhenPaused = isChk(m_chkMediaHidePaused);
+                m_config.mediaIslandMarquee = isChk(m_chkMediaMarquee);
             }
 
             void DrawOwnerButton(const DRAWITEMSTRUCT* dis) const
@@ -2225,16 +2605,18 @@ namespace winrings::tools
                 RECT rc = dis->rcItem;
                 const bool primary = (dis->CtlID == ID_BTN_SAVE);
                 const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+                const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
 
                 HBRUSH clearBr = CreateSolidBrush(
                     (dis->CtlID >= ID_BTN_APPLY && dis->CtlID <= ID_BTN_PREVIEW) ? kColSidebar : kColBg);
                 FillRect(hdc, &rc, clearBr);
                 DeleteObject(clearBr);
 
-                COLORREF bgCol = primary
-                    ? (pressed ? RGB(0, 102, 184) : kColAccent)
-                    : (pressed ? RGB(58, 58, 66) : RGB(45, 45, 52));
-                COLORREF rimCol = primary ? RGB(36, 148, 232) : RGB(72, 72, 80);
+                COLORREF bgCol = disabled
+                    ? RGB(36, 36, 40)
+                    : (primary ? (pressed ? RGB(0, 102, 184) : kColAccent)
+                               : (pressed ? RGB(58, 58, 66) : RGB(45, 45, 52)));
+                COLORREF rimCol = disabled ? RGB(52, 52, 58) : (primary ? RGB(36, 148, 232) : RGB(72, 72, 80));
 
                 HBRUSH bg = CreateSolidBrush(bgCol);
                 HPEN pen = CreatePen(PS_SOLID, 1, rimCol);
@@ -2249,7 +2631,7 @@ namespace winrings::tools
                 wchar_t txt[128]{};
                 GetWindowTextW(dis->hwndItem, txt, _countof(txt));
                 SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, primary ? RGB(255, 255, 255) : kColText);
+                SetTextColor(hdc, disabled ? kColMuted : (primary ? RGB(255, 255, 255) : kColText));
                 HGDIOBJ oldFont = SelectObject(hdc, primary ? m_boldFont : m_font);
                 DrawTextW(hdc, txt, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
                 SelectObject(hdc, oldFont);
@@ -2277,6 +2659,17 @@ namespace winrings::tools
                 case WM_DRAWITEM:
                     DrawOwnerButton(reinterpret_cast<const DRAWITEMSTRUCT*>(lp));
                     return TRUE;
+
+                case WM_HSCROLL:
+                    if (reinterpret_cast<HWND>(lp) == m_sldBarH)
+                    {
+                        const int v = static_cast<int>(SendMessageW(m_sldBarH, TBM_GETPOS, 0, 0));
+                        m_populating = true;
+                        SetWindowTextW(m_edBarH, std::to_wstring(v).c_str());
+                        m_populating = false;
+                        return 0;
+                    }
+                    break;
 
                 case WM_CTLCOLORSTATIC:
                 {
@@ -2329,9 +2722,20 @@ namespace winrings::tools
 
                     if (!m_populating)
                     {
-                        if (((id == ID_ED_RADIUS || id == ID_ED_DEADZONE || id == ID_ED_ICONSIZE ||
-                              id == ID_ED_MAXSLOTS || id == ID_ED_ACCENT) && code == EN_CHANGE) ||
-                            (id == ID_CHK_INCLUDE_UNPINNED && code == BN_CLICKED))
+                        if ((id == ID_ED_CLOCK_FMT && code == EN_CHANGE) ||
+                            (id == ID_CB_CLOCK_CASING && code == CBN_SELCHANGE))
+                        {
+                            UpdateClockPreview();
+                        }
+                        else if (id == ID_ED_BAR_H && code == EN_CHANGE)
+                        {
+                            const int v = (std::clamp)(ParseIntOr(GetText(m_edBarH), 30), 28, 40);
+                            SendMessageW(m_sldBarH, TBM_SETPOS, TRUE, static_cast<LPARAM>(v));
+                        }
+                        else if (((id == ID_ED_RADIUS || id == ID_ED_DEADZONE || id == ID_ED_ICONSIZE ||
+                                   id == ID_ED_MAXSLOTS || id == ID_ED_ACCENT) && code == EN_CHANGE) ||
+                                 ((id == ID_CHK_INCLUDE_UNPINNED || id == ID_CHK_NO_BLUR) && code == BN_CLICKED) ||
+                                 (id == ID_CB_SEL_INDICATOR && code == CBN_SELCHANGE))
                         {
                             SyncPreviewRelevantFields();
                         }
@@ -2374,6 +2778,11 @@ namespace winrings::tools
                     case ID_BTN_PREVIEW:
                         SaveAndReload();
                         TriggerHostCommand(L"--preview");
+                        return 0;
+                    case ID_BTN_RESET_MEDIA_POS:
+                        m_config.mediaIslandOffsetXPct = -1;
+                        if (m_btnResetMediaPos)
+                            EnableWindow(m_btnResetMediaPos, FALSE);
                         return 0;
 
                     case ID_BTN_BROWSE_FILE:
@@ -2556,14 +2965,26 @@ namespace winrings::tools
             int m_prevSwapW = 0;
             int m_prevSwapH = 0;
 
-            // Controls (Pages 1-3)
+            // Controls (Pages 1-4)
             HWND m_cbMouseTrigger{}, m_cbScrollMode{}, m_chkDoubleTap{}, m_edTapMs{}, m_edDTapMs{};
             HWND m_chkHotkey{}, m_chkModAlt{}, m_chkModCtrl{}, m_chkModShift{}, m_chkModWin{}, m_cbHotkeyVk{};
             HWND m_chkMenuKey{}, m_chkWinTab{}, m_chkAltTab{};
+            HWND m_chkWinKey{}, m_chkDirectSwitch{}, m_cbDirectSwitchKey{};
+            HWND m_chkTpPhysClick{}, m_chkTpCorner{}, m_cbTpCornerPos{}, m_edTpCornerPct{};
+            HWND m_chkShake{}, m_edShakeRev{}, m_edShakeWin{}, m_edShakeAmp{}, m_chkShakeFs{};
+            HWND m_chkHotCorner{}, m_cbHcPos{}, m_cbHcAct{}, m_edHcPress{};
 
             HWND m_edAccent{}, m_edRadius{}, m_edDeadzone{}, m_edIconSize{}, m_edThumbScale{};
             HWND m_cbWinView{}, m_chkNoAnim{}, m_chkFanOne{}, m_chkPtrFollow{}, m_chkShiftCenter{}, m_chkIncludeUnpinned{};
-            HWND m_edMaxSlots{}, m_ringCanvas{};
+            HWND m_edMaxSlots{}, m_cbSelIndicator{}, m_chkNoBlur{}, m_ringCanvas{};
+
+            HWND m_chkTopBarOn{}, m_chkDockTop{}, m_sldBarH{}, m_edBarH{}, m_chkKeepFont{}, m_chkClock1L{};
+            HWND m_edClockFmt{}, m_cbClockCasing{}, m_lblClockPreview{};
+            HWND m_chkHideApps{}, m_chkHideStart{}, m_chkHideSearch{}, m_chkHideTaskView{}, m_chkHideWidgets{};
+            HWND m_cbBackdrop{}, m_chkAllMon{};
+            HWND m_chkFwaOn{}, m_chkFwaPill{}, m_chkFwaHk{};
+            HWND m_chkMediaOn{}, m_cbMediaPos{}, m_cbMediaFs{}, m_chkMediaExpand{}, m_chkMediaVol{};
+            HWND m_chkMediaHidePaused{}, m_chkMediaMarquee{}, m_btnResetMediaPos{};
 
             HWND m_lbPins{}, m_cbPinKind{}, m_edPinLabel{}, m_edPinPath{}, m_edPinFolderMax{};
         };

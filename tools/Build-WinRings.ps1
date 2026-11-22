@@ -4,13 +4,21 @@ $root = Split-Path -Parent $PSScriptRoot
 
 function Find-VcVars64 {
     $candidates = @(
+        'C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat',
         'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat',
         'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat',
         'C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat',
         'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat'
     )
+    $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path $vswhere) {
+        $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+        if ($vsPath) {
+            $candidates = @((Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat')) + $candidates
+        }
+    }
     foreach ($p in $candidates) {
-        if (Test-Path $p) { return $p }
+        if ($p -and (Test-Path $p)) { return $p }
     }
     throw "Could not locate VS 2022 vcvars64.bat"
 }
@@ -65,7 +73,7 @@ $bat2 = @"
 @echo off
 call "$vcvars" >nul || exit /b 1
 rc /nologo /fo "$root\build\obj\shell\WinRingsShell.res" "$root\src\shell\WinRingsShell.rc" || exit /b 1
-cl $cflags /DWINRINGS_SHELL_EXPORTS /Fo"$root\build\obj\shell\\" "$root\src\shared\WinRingsConfig.cpp" "$root\src\shell\AcrylicBackdrop.cpp" "$root\src\shell\AppIndex.cpp" "$root\src\shell\WindowTracker.cpp" "$root\src\shell\SlotModel.cpp" "$root\src\shell\DwmThumbPool.cpp" "$root\src\shell\InputEngine.cpp" "$root\src\shell\DropTarget.cpp" "$root\src\shell\RingOverlay.cpp" "$root\src\shell\ShellController.cpp" "$root\src\shell\DllMain.cpp" /link /DLL /DEF:"$root\src\shell\WinRingsShell.def" /SUBSYSTEM:WINDOWS $lflags /OUT:"$root\build\bin\WinRingsShell.dll" "$root\build\obj\shell\WinRingsShell.res" d3d11.lib d2d1.lib dwrite.lib dcomp.lib dxgi.lib dxguid.lib dwmapi.lib windowscodecs.lib winhttp.lib ole32.lib oleaut32.lib shell32.lib shlwapi.lib uxtheme.lib propsys.lib version.lib comctl32.lib user32.lib gdi32.lib advapi32.lib windowsapp.lib runtimeobject.lib || exit /b 1
+cl $cflags /DWINRINGS_SHELL_EXPORTS /Fo"$root\build\obj\shell\\" "$root\src\shared\WinRingsConfig.cpp" "$root\src\shell\AcrylicBackdrop.cpp" "$root\src\shell\AppIndex.cpp" "$root\src\shell\WindowTracker.cpp" "$root\src\shell\SlotModel.cpp" "$root\src\shell\DwmThumbPool.cpp" "$root\src\shell\InputEngine.cpp" "$root\src\shell\FullWorkAreaCtrl.cpp" "$root\src\shell\GestureEngine.cpp" "$root\src\shell\MediaIsland.cpp" "$root\src\shell\DropTarget.cpp" "$root\src\shell\RingOverlay.cpp" "$root\src\shell\TopBarHook.cpp" "$root\src\shell\XamlTaskbarCtrl.cpp" "$root\src\shell\ShellController.cpp" "$root\src\shell\DllMain.cpp" /link /DLL /DEF:"$root\src\shell\WinRingsShell.def" /SUBSYSTEM:WINDOWS $lflags /OUT:"$root\build\bin\WinRingsShell.dll" "$root\build\obj\shell\WinRingsShell.res" d3d11.lib d2d1.lib dwrite.lib dcomp.lib dxgi.lib dxguid.lib dwmapi.lib windowscodecs.lib winhttp.lib hid.lib ole32.lib oleaut32.lib shell32.lib shlwapi.lib uxtheme.lib propsys.lib version.lib comctl32.lib user32.lib gdi32.lib advapi32.lib windowsapp.lib runtimeobject.lib || exit /b 1
 "@
 Invoke-VcBat $bat2 'shell'
 
