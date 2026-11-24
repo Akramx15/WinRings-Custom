@@ -6,7 +6,7 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
 
 ## 1. Repository Identity & Upstream Lineage
 
-- **Fork (`origin`):** `https://github.com/Akramx15/WinRings-Custom` (`main` branch, currently **`v3.0.4.0`**)
+- **Fork (`origin`):** `https://github.com/Akramx15/WinRings-Custom` (`main` branch, currently **`v3.0.5.0`**)
 - **Upstream (`upstream`):** `https://github.com/AhmadotEng/WinRings` (synced from release tag **`v3.0.0`**, commit `df4012a`)
 - **Pre-Upgrade Backup Branch:** `v2.0.1-custom-backup` (`8cf2b11`) — historical reference for the v2 custom fork before the v3 upgrade.
 
@@ -37,9 +37,9 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
 ### Custom Fork Modules (on top of Upstream `v3.0.0`)
 
 1. **Unified Minimal Top Bar** (`src/shell/TopBarHook.*`, `src/shell/XamlTaskbarCtrl.*`, `src/shared/ClockFormat.h`):
-   - Docks Windows 11 taskbar cleanly to the top edge (`28–40 DIP`), supports single-line compact clock formatting/casing, selective hiding of app buttons / Start / Search / Task View / Widgets, backdrop styles, and live XAML `SystemTrayFrame.ActualWidth()` reporting.
+   - Docks Windows 11 taskbar cleanly to the top edge (`28–40 DIP`), supports single-line compact clock formatting/casing, selective hiding of app buttons / Start / Search / Task View / Widgets, backdrop styles, live XAML `SystemTrayFrame.ActualWidth()` reporting, and synchronous `Shell_TrayWnd` `WM_WINDOWPOSCHANGING` top-lock + immediate wake/display/unlock sync so Sleep/Wake never flashes the bar to the bottom.
 2. **FullWorkArea Integration** (`src/shell/FullWorkAreaCtrl.*`):
-   - Extends maximized windows behind the minimal top bar without corrupting work area or Z-order, with pill click-through and `Win+\`` hotkey support.
+   - Extends maximized windows behind the minimal top bar without corrupting work area or Z-order, with pill click-through, `0 ms` wake/display recovery, and `Win+\`` hotkey support.
 3. **Media Island** (`src/shell/MediaIsland.*`):
    - Compact Dynamic Island media pill in the top bar powered by WinRT GSMTC (`GlobalSystemMediaTransportControlsSessionManager`).
    - Features hover expansion card, dynamic tray-width avoidance + progressive shrink (`XamlTaskbarCtrl::GetSystemTrayWidthDip()`), `Alt+Drag` horizontal repositioning (`mediaIslandOffsetXPct`), right-click context menu, scroll-wheel master volume (`IAudioEndpointVolume` via `WM_MOUSEWHEEL`, `WM_POINTERWHEEL`, `WH_MOUSE_LL`, and `ELAN06FA` 2-finger HID reports), full top-bar-height hit-testing (`y=0..barPx`), and Z-order fullscreen detection (`SyncWithTaskbar`, `GamesOnly`, `NeverHide`).
@@ -47,10 +47,10 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
    - `winKeyTrigger` (Start Menu replacement via Win key, paired with Open-Shell neutralization)
    - `directSwitch` (`Alt+F` / `Win+F` / `Alt+Q` instant cycling with MRU freeze)
    - Raw Input touchpad physical left-click, corner-tap, and 2-finger Media Island volume scroll (`ELAN06FA` HID parsing with serial multi-contact continuation tracking, `350 ms` idle state reset, and periodic + resume-triggered `EnsureDeviceRegistration` auto-recovery)
-   - Ultra-lightweight 2D vector mouse shake trigger in `InputEngine` (`WH_MOUSE_LL`, only filtering `selfInjected` `kWinRingsInjectedTag` events so PTP `LLMHF_INJECTED` moves are preserved, live `GetAsyncKeyState` button check, cursor-heartbeat silent hook eviction recovery in `ShellController`)
+   - Ultra-lightweight 2D vector mouse shake trigger in `InputEngine` (`WH_MOUSE_LL`, only filtering `selfInjected` `kWinRingsInjectedTag` events so PTP `LLMHF_INJECTED` moves are preserved, live `GetAsyncKeyState` button check, and UIPI-aware cursor-heartbeat silent hook eviction recovery in `ShellController` that ignores elevated/admin windows and secure desktops)
    - GNOME-style hot-corner velocity/pressure flick
    - Drag-to-Snap / Split-Screen (`WindowSnapCtrl`) from Ring icons (`Tear-off` for pinned, immediate drag for unpinned) and Window Cards: lightweight decoupled ~60Hz `SWP_ASYNCWINDOWPOS` live window tracking + Fluent edge ghost preview, deferred zero-swallowed `WM_LBUTTONUP` release, DWM border-compensated **Direct Snap** (`ApplyDirectSnap`, default `dragToSnapUseSnapAssist = false` for immediate foreground focus without Snap Assist click theft) or optional `Win+Arrow` Snap Assist (`dragToSnapUseSnapAssist = true`), plus optional closed pinned app launch & event-driven snap.
-   - Ring window card `X` close button, right-click `Run as Administrator` & `End Task`, **Search Arc (`m_searchArcActive`) right-click menu** (`Run as Administrator` + `Open File Location` with `.lnk` target / UWP package resolution), `Toggle Top Minimal Bar` & `Show Media Island` toggles, `SelectionIndicatorStyle` (`GlowOnly`, `SectorWedge`, `PointerLine`), and `disableRingBlur` performance mode.
+   - Ring window card `X` close button, right-click `Run as Administrator` & `End Task`, **Search Arc (`m_searchArcActive`) right-click menu** (`Open`, `Run as Administrator`, `Open File Location` with `.lnk` target / UWP package resolution, and `Pin to Ring` / `Unpin from Ring`), `Toggle Top Minimal Bar` & `Show Media Island` toggles, `SelectionIndicatorStyle` (`GlowOnly`, `SectorWedge`, `PointerLine`), and `disableRingBlur` performance mode.
 
 ---
 

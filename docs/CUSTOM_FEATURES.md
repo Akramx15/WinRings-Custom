@@ -1,4 +1,4 @@
-# WinRings-Custom Features (`v3.0.4.0`)
+# WinRings-Custom Features (`v3.0.5.0`)
 
 `WinRings-Custom` combines **upstream `WinRings v3.0.0`** (`WCA` native acrylic + 3D beveled glass edges, `m_outsideClickPending` click-vs-drag guard, `isRingDragActive` reorder guard, `explorer.exe` folder icon fix, slim core binary) with Akram's unified Windows 11 desktop enhancements:
 
@@ -6,7 +6,7 @@
 
 ## 1. Unified Minimal Top Bar (`TopBarHook` + `XamlTaskbarCtrl` + `ClockFormat.h`)
 
-- **Top Edge Docking:** Moves the native Windows 11 taskbar to the top monitor edge (`28–40 DIP` configurable height) and updates the desktop work area cleanly.
+- **Top Edge Docking & Zero-Flash Sleep/Wake Lock:** Moves the native Windows 11 taskbar to the top monitor edge (`28–40 DIP` configurable height), updates the desktop work area cleanly, and uses a synchronous `Shell_TrayWnd` `WM_WINDOWPOSCHANGING` clamp (`SyncTrayTopLock`) plus immediate `0 ms` wake/display/unlock resync (`OnWakeOrUnlockImmediate` / `TriggerImmediateTopBarWakeSync`) so resuming from Sleep never briefly drops the taskbar to the bottom edge.
 - **Single-Line Compact Clock:** Custom date/time format (`topBarClockFormat`) and casing (`CompactLower`, `Default`, `Lowercase`, `Uppercase`) with live preview in Settings Page 2 (**Top Bar & Media Island**).
 - **Selective Chrome Hiding:** Independently hide Taskbar App Buttons, Start Button, Search, Task View, and Widgets while keeping the native System Tray functional.
 - **Dynamic Tray Telemetry:** Queries primary `SystemTrayFrame.ActualWidth()` via `XamlTaskbarCtrl::GetSystemTrayWidthDip()` and notifies `MediaIsland` immediately on layout shifts.
@@ -41,7 +41,7 @@
 - **Win Key Start Replacement (`winKeyTrigger`):** Pressing Windows key opens WinRings instead of Start Menu (deployed alongside HKCU Open-Shell neutralization).
 - **Direct Window Switch (`directSwitchEnabled`):** `Alt + F` (configurable to `Win + F` or `Alt + Q`) cycles windows immediately without rendering a switcher popup, freezing MRU order until modifier release.
 - **Touchpad Physical Left-Click, Corner Tap & 2-Finger Volume (`ELAN06FA` HID):** Parses raw HID touchpad button & contact coordinates to distinguish physical left-click button presses from touchpad tap-to-click (`touchpadPhysLeftClickTrigger`), optional corner taps (`touchpadCornerTrigger` with serial multi-contact tracking and `350 ms` idle reset), and 2-finger scroll over Media Island, with automatic `GetRegisteredRawInputDevices` self-healing.
-- **2D Mouse Shake (`shakeTriggerEnabled`):** Runs directly inside `InputEngine` (`WH_MOUSE_LL`, cached DPI scale, fixed circular buffer, zero Win32 API calls per pixel, `selfInjected`-only filter so PTP `LLMHF_INJECTED` cursor moves work reliably, live `GetAsyncKeyState` button check, and cursor-heartbeat watchdog recovery against boot hook eviction).
+- **2D Mouse Shake (`shakeTriggerEnabled`):** Runs directly inside `InputEngine` (`WH_MOUSE_LL`, cached DPI scale, fixed circular buffer, zero Win32 API calls per pixel, `selfInjected`-only filter so PTP `LLMHF_INJECTED` cursor moves work reliably, live `GetAsyncKeyState` button check, and UIPI-aware cursor-heartbeat watchdog recovery that avoids false reinstalls while an elevated/Admin window is focused).
 - **GNOME Hot Corner (`hotCornerEnabled`):** Triggers Task View (`Win+Tab`) or WinRings only when flicking with deliberate velocity/pressure into the configured top corner (`Top-Left` / `Top-Right`).
 
 ---
@@ -53,6 +53,6 @@
   - Dragging a **pinned Ring slot** inside the ring reorders pins normally; pulling it past `outerRadius + dragToSnapTearOffDip` after `dragToSnapHoldMs` cancels temporary reordering cleanly and live-drags the open app—or optionally launches & auto-snaps a closed pinned app/folder/Recycle Bin/website (`dragToSnapLaunchClosed`) via `HSHELL_*` events (zero polling).
   - Releasing on a screen edge commits immediately with `WM_LBUTTONUP` preserved (never swallowed) and deferred snap execution: by default (`dragToSnapUseSnapAssist = false`), **Direct Pixel-Perfect Snap** compensates DWM extended frame borders (`DWMWA_EXTENDED_FRAME_BOUNDS`) via `ComputeDirectSnapRect` and sets immediate foreground focus with **zero stolen clicks**; toggling `dragToSnapUseSnapAssist = true` uses native `Win + Arrow` + Windows 11 Snap Assist. Releasing outside any edge drops the window cleanly at its live position.
 - **Window Card `X` Close Button:** Clicking the `X` close badge on hovered outer-arc window cards closes that window immediately without activating it.
-- **Ring, Window Card & Search Arc Context Actions:** Right-click main slots/windows for **Run as Administrator**, **Close Window**, **End Task** (`TerminateProcessByPid`), **Toggle Top Minimal Bar**, and **Show Media Island**; right-clicking any result in the top **Search Arc** (`m_searchArcActive`) preserves the arc while offering **`Run as Administrator`** and **`Open File Location`** (resolving `.lnk` shortcuts and UWP `shell:AppsFolder` targets).
+- **Ring, Window Card & Search Arc Context Actions:** Right-click main slots/windows for **Run as Administrator**, **Close Window**, **End Task** (`TerminateProcessByPid`), **Toggle Top Minimal Bar**, and **Show Media Island**; right-clicking any result in the top **Search Arc** (`m_searchArcActive`) preserves the arc while offering **`Open`**, **`Run as Administrator`**, **`Open File Location`** (resolving `.lnk` shortcuts and UWP `shell:AppsFolder` targets), and **`Pin to Ring` / `Unpin from Ring`** (smart `.lnk`-to-`.exe` resolution + duplicate pin detection).
 - **Selection Indicator Styles (`selectionIndicator`):** `GlowOnly`, `SectorWedge` (restored classic v1 blue wedge accent), or `PointerLine`.
 - **Ultra-Fast No-Blur Mode (`disableRingBlur`):** Fully disables native `WCA` backdrop (`SW_HIDE`), `Windows::UI::Composition` blur, and synthetic grain noise (`useNoise = false`) for solid high-contrast rendering and minimal GPU work.

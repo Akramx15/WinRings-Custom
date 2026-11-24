@@ -809,6 +809,71 @@ static void TestSnapEdgeClassification()
     CHECK(!IsNormalizedPointInTouchpadCorner(1.05, 0.05, true, 18));
 }
 
+static void TestTopBarClampAndSearchPin()
+{
+    // Bottom-edge drop on wake is clamped synchronously to monitor top + target height.
+    const auto dropClamp = ClampTopDockedTaskbarWindowPos(true, 0, 1200, 42, 108, true, true, 1128, 72, 0, 42);
+    CHECK(dropClamp.modifiedMove && dropClamp.y == 0);
+    CHECK(dropClamp.modifiedSize && dropClamp.cy == 42);
+
+    // Already docked at top with matching height -> no-op.
+    const auto okTop = ClampTopDockedTaskbarWindowPos(true, 0, 1200, 42, 108, true, true, 0, 42, 0, 42);
+    CHECK(!okTop.modifiedMove && !okTop.modifiedSize);
+
+    // Top auto-hide offscreen negative Y and tiny sliver height remain untouched.
+    const auto autoHide = ClampTopDockedTaskbarWindowPos(true, 0, 1200, 42, 108, true, true, -40, 2, -40, 2);
+    CHECK(!autoHide.modifiedMove && autoHide.y == -40);
+    CHECK(!autoHide.modifiedSize && autoHide.cy == 2);
+
+    // Lock disabled leaves requested coordinates untouched.
+    const auto unlocked = ClampTopDockedTaskbarWindowPos(false, 0, 1200, 42, 108, true, true, 1128, 72, 0, 42);
+    CHECK(!unlocked.modifiedMove && unlocked.y == 1128);
+    CHECK(!unlocked.modifiedSize && unlocked.cy == 72);
+
+    // Negative monitor coordinates (stacked secondary/offset monitor) clamp cleanly to monTop.
+    const auto negMon = ClampTopDockedTaskbarWindowPos(true, -1080, 0, 42, 108, true, false, -72, 42, -1080, 42);
+    CHECK(negMon.modifiedMove && negMon.y == -1080);
+    CHECK(!negMon.modifiedSize);
+
+    // Search Arc pin path resolution: plain .lnk -> resolved .exe; .lnk with args or UWP stays raw.
+    CHECK(ChooseSearchPinPath(
+        L"C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Brave.lnk",
+        L"C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+        L"") == L"C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe");
+    CHECK(ChooseSearchPinPath(
+        L"C:\\Users\\A\\Desktop\\App.lnk",
+        L"C:\\App\\app.exe",
+        L"--profile=work") == L"C:\\Users\\A\\Desktop\\App.lnk");
+    CHECK(ChooseSearchPinPath(
+        L"shell:AppsFolder\\Microsoft.WindowsTerminal_8wekyb3d8bbwe!App",
+        L"",
+        L"") == L"shell:AppsFolder\\Microsoft.WindowsTerminal_8wekyb3d8bbwe!App");
+
+    // Duplicate pin detection handles normalized slashes, case differences, and raw vs resolved shortcut target.
+    std::vector<PinnedSlotConfig> pins;
+    PinnedSlotConfig p1;
+    p1.id = L"pin-1";
+    p1.kind = SlotKind::App;
+    p1.label = L"Brave";
+    p1.pathOrUrl = L"C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe";
+    pins.push_back(p1);
+
+    PinnedSlotConfig p2;
+    p2.id = L"col-1";
+    p2.kind = SlotKind::Collection;
+    p2.label = L"Col";
+    pins.push_back(p2);
+
+    CHECK(FindPinnedSlotIndexByPath(
+        pins,
+        L"c:/Program Files/BraveSoftware/Brave-Browser/Application/BRAVE.EXE",
+        L"C:\\ProgramData\\Start Menu\\Brave.lnk") == 0);
+    CHECK(FindPinnedSlotIndexByPath(
+        pins,
+        L"C:\\Program Files\\Everything\\Everything.exe",
+        L"") == -1);
+}
+
 int wmain()
 {
     TestRadialMath();
@@ -821,6 +886,7 @@ int wmain()
     TestSlotMatchingAndPreviews();
     TestDragSpringAndReorder();
     TestSnapEdgeClassification();
+    TestTopBarClampAndSearchPin();
 
     if (g_failures == 0)
     {

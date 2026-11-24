@@ -16,9 +16,14 @@ namespace winrings
         FullWorkAreaCtrl(const FullWorkAreaCtrl&) = delete;
         FullWorkAreaCtrl& operator=(const FullWorkAreaCtrl&) = delete;
 
-        bool Initialize(HMODULE shellModule, const SwitcherConfig& cfg, std::function<void()> onVisibilityChanged);
+        bool Initialize(
+            HMODULE shellModule,
+            const SwitcherConfig& cfg,
+            std::function<void()> onVisibilityChanged,
+            std::function<void()> onPowerOrDisplayResume = nullptr);
         void UpdateConfig(const SwitcherConfig& cfg);
         void Shutdown();
+        void OnWakeOrUnlockImmediate();
 
         bool IsTaskbarHidden() const noexcept { return m_hidden; }
         RECT GetPrimaryTaskbarRect() const noexcept;
@@ -58,6 +63,7 @@ namespace winrings
 
         SwitcherConfig m_config;
         std::function<void()> m_onVisibilityChanged;
+        std::function<void()> m_onPowerOrDisplayResume;
 
         bool m_enabled = false;
         bool m_centerMode = true;
@@ -74,6 +80,7 @@ namespace winrings
         ULONGLONG m_trayBurstStart = 0;
         DWORD m_trayBurstCount = 0;
         int m_lastShift = -1;
+        int m_lastIsTop = -1;
         int m_lastMonW = 0;
         int m_lastTrayH = 42;
 

@@ -2678,6 +2678,8 @@ namespace winrings
             CmdEndTask = 209,
             CmdSearchRunAsAdmin = 210,
             CmdSearchOpenLocation = 211,
+            CmdSearchOpen = 212,
+            CmdSearchTogglePin = 213,
             CmdNewCollection = 300,
             CmdToggleTopBar = 301,
             CmdSettings = 302,
@@ -2688,12 +2690,26 @@ namespace winrings
         RingSlot targetSlot;
         DWORD targetPid = 0;
         std::wstring adminTarget;
+        std::wstring searchPinPath;
+        int existingSearchPinIdx = -1;
         const bool hasSlot = !hasSearchResult &&
             (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_visibleSlots.size()));
         if (hasSearchResult)
         {
+            std::wstring lnkTarget;
+            std::wstring lnkArgs;
+            std::wstring lnkWorkDir;
+            if (HasSuffixInsensitiveW(searchSlot.pathOrUrl, L".lnk"))
+                SlotModel::ResolveShortcutTarget(searchSlot.pathOrUrl, lnkTarget, lnkArgs, lnkWorkDir);
+            searchPinPath = ChooseSearchPinPath(searchSlot.pathOrUrl, lnkTarget, lnkArgs);
+            existingSearchPinIdx = FindPinnedSlotIndexByPath(m_config.pinnedSlots, searchPinPath, searchSlot.pathOrUrl);
+
+            AppendMenuW(menu, MF_STRING, CmdSearchOpen, L"Open");
             AppendMenuW(menu, MF_STRING, CmdSearchRunAsAdmin, L"Run as Administrator");
             AppendMenuW(menu, MF_STRING, CmdSearchOpenLocation, L"Open File Location");
+            AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(menu, MF_STRING, CmdSearchTogglePin,
+                (existingSearchPinIdx >= 0) ? L"Unpin from Ring" : L"Pin to Ring");
         }
         else if (hasSlot)
         {
@@ -2819,6 +2835,11 @@ namespace winrings
             if (!adminTarget.empty())
                 SlotModel::LaunchRunAsAdmin(adminTarget);
             break;
+        case CmdSearchOpen:
+            Dismiss();
+            if (!searchSlot.pathOrUrl.empty())
+                SlotModel::LaunchPathOrUrl(searchSlot.pathOrUrl);
+            break;
         case CmdSearchRunAsAdmin:
             Dismiss();
             if (!searchSlot.pathOrUrl.empty())
@@ -2828,6 +2849,25 @@ namespace winrings
             Dismiss();
             if (!searchSlot.pathOrUrl.empty())
                 SlotModel::RevealInExplorer(searchSlot.pathOrUrl);
+            break;
+        case CmdSearchTogglePin:
+            if (existingSearchPinIdx >= 0 &&
+                static_cast<size_t>(existingSearchPinIdx) < m_config.pinnedSlots.size())
+            {
+                m_config.pinnedSlots.erase(m_config.pinnedSlots.begin() + existingSearchPinIdx);
+            }
+            else if (!searchPinPath.empty())
+            {
+                PinnedSlotConfig p;
+                p.id = L"pin-" + std::to_wstring(GetTickCount64());
+                p.kind = SlotKind::App;
+                p.label = searchSlot.label;
+                p.pathOrUrl = searchPinPath;
+                m_config.pinnedSlots.push_back(std::move(p));
+            }
+            if (m_callbacks.saveAndReloadConfig)
+                m_callbacks.saveAndReloadConfig(m_config);
+            Dismiss();
             break;
         case CmdMinAll:
             for (const auto& w : targetSlot.windows) WindowTracker::MinimizeWindow(w.hwnd);

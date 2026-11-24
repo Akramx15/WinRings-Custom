@@ -91,11 +91,59 @@ namespace winrings
         constexpr UINT_PTR kWatchdogTimerId = 1;
         constexpr UINT kWatchdogIntervalMs = 1000;
         constexpr UINT_PTR kTopBarRetryTimerId = 2;
+        constexpr UINT_PTR kWakeFollowUpTimerId = 3;
         constexpr UINT kMsgXamlFirstAttached = WM_APP + 300;
         constexpr UINT kMsgShakeTriggered = WM_APP + 301;
         constexpr UINT kMsgStartOpenSnap = WM_APP + 302;
         constexpr UINT kMsgStartClosedSnap = WM_APP + 303;
+        constexpr UINT kMsgPowerOrDisplayResume = WM_APP + 304;
         constexpr wchar_t kPreviewControlClassW[] = L"WinRings.Preview.Control.v1";
+
+        bool IsWindowProcessElevated(HWND hwnd) noexcept
+        {
+            if (!hwnd || !IsWindow(hwnd))
+                return false;
+
+            DWORD pid = 0;
+            GetWindowThreadProcessId(hwnd, &pid);
+            if (pid == 0 || pid == GetCurrentProcessId())
+                return false;
+
+            HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (!hProc)
+                return GetLastError() == ERROR_ACCESS_DENIED;
+
+            bool elevated = false;
+            HANDLE hToken = nullptr;
+            if (OpenProcessToken(hProc, TOKEN_QUERY, &hToken) && hToken)
+            {
+                TOKEN_ELEVATION elev{};
+                DWORD retLen = 0;
+                if (GetTokenInformation(hToken, TokenElevation, &elev, sizeof(elev), &retLen))
+                    elevated = (elev.TokenIsElevated != 0);
+                CloseHandle(hToken);
+            }
+            else if (GetLastError() == ERROR_ACCESS_DENIED)
+            {
+                elevated = true;
+            }
+            CloseHandle(hProc);
+            return elevated;
+        }
+
+        bool IsElevatedOrSecureDesktopBlockingHooks(POINT cursorPt) noexcept
+        {
+            HDESK hInput = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+            if (!hInput)
+                return true;
+            CloseDesktop(hInput);
+
+            if (IsWindowProcessElevated(GetForegroundWindow()))
+                return true;
+            if (IsWindowProcessElevated(WindowFromPoint(cursorPt)))
+                return true;
+            return false;
+        }
 
         double QueryPrimaryDpiScale() noexcept
         {
@@ -317,6 +365,7 @@ namespace winrings
                         m_watchdogHasCursorPt = false;
                         m_watchdogMouseStallTicks = 0;
                         m_watchdogLastMouseHookTick = m_input.LastMouseHookTick();
+                        TriggerImmediateTopBarWakeSync(L"RefreshInput");
                         return TRUE;
 
                     case WINRINGS_CMD_RELOAD_CONFIG:
@@ -378,13 +427,23 @@ namespace winrings
                                     {
                                         if (hookTick == m_watchdogLastMouseHookTick)
                                         {
-                                            ++m_watchdogMouseStallTicks;
-                                            if (m_watchdogMouseStallTicks >= 2)
+                                            if (IsElevatedOrSecureDesktopBlockingHooks(cur))
                                             {
-                                                ShellDiagLog(L"ShellCtrl", L"Watchdog: cursor moved without WH_MOUSE_LL callbacks -> reinstalling hooks");
-                                                m_input.ReinstallHooks();
                                                 m_watchdogMouseStallTicks = 0;
-                                                m_watchdogLastMouseHookTick = m_input.LastMouseHookTick();
+                                            }
+                                            else
+                                            {
+                                                ++m_watchdogMouseStallTicks;
+                                                const ULONGLONG now = GetTickCount64();
+                                                if (m_watchdogMouseStallTicks >= 2 &&
+                                                    (m_lastWatchdogReinstallTick == 0 || (now - m_lastWatchdogReinstallTick) >= 10000ull))
+                                                {
+                                                    ShellDiagLog(L"ShellCtrl", L"Watchdog: cursor moved without WH_MOUSE_LL callbacks -> reinstalling hooks");
+                                                    m_input.ReinstallHooks();
+                                                    m_lastWatchdogReinstallTick = now;
+                                                    m_watchdogMouseStallTicks = 0;
+                                                    m_watchdogLastMouseHookTick = m_input.LastMouseHookTick();
+                                                }
                                             }
                                         }
                                         else
@@ -415,6 +474,20 @@ namespace winrings
                         }
                         return 0;
                     }
+                    if (wp == kWakeFollowUpTimerId && !m_previewMode)
+                    {
+                        if (m_armed)
+                        {
+                            ApplyTopBarState(true);
+                            m_fullWorkArea.OnWakeOrUnlockImmediate();
+                            m_mediaIsland.RefreshLayoutAndVisibility();
+                        }
+                        if (--m_wakeFollowUpRemaining <= 0)
+                            KillTimer(hwnd, kWakeFollowUpTimerId);
+                        else
+                            SetTimer(hwnd, kWakeFollowUpTimerId, 200, nullptr);
+                        return 0;
+                    }
                     break;
 
                 case kMsgXamlFirstAttached:
@@ -423,6 +496,11 @@ namespace winrings
                         ShellDiagLog(L"ShellCtrl", L"Received kMsgXamlFirstAttached -> forcing TopBar sync");
                         ApplyTopBarState(true);
                     }
+                    return 0;
+
+                case kMsgPowerOrDisplayResume:
+                    if (m_armed && !m_previewMode)
+                        TriggerImmediateTopBarWakeSync(L"PowerOrDisplay");
                     return 0;
 
                 case kMsgShakeTriggered:
@@ -744,9 +822,17 @@ namespace winrings
                 {
                     m_windowSnap.Initialize(m_shellModule);
                     m_windowSnap.UpdateConfig(m_config);
-                    m_fullWorkArea.Initialize(m_shellModule, m_config, [this]() {
-                        m_mediaIsland.OnTaskbarVisibilityChanged(m_fullWorkArea.IsTaskbarHidden());
-                    });
+                    HWND ctrlHwnd = m_controlHwnd;
+                    m_fullWorkArea.Initialize(
+                        m_shellModule,
+                        m_config,
+                        [this]() {
+                            m_mediaIsland.OnTaskbarVisibilityChanged(m_fullWorkArea.IsTaskbarHidden());
+                        },
+                        [ctrlHwnd]() {
+                            if (ctrlHwnd && IsWindow(ctrlHwnd))
+                                PostMessageW(ctrlHwnd, kMsgPowerOrDisplayResume, 0, 0);
+                        });
                     MediaIsland::Callbacks mediaCb{};
                     mediaCb.getSystemTrayWidthDip = []() {
                         return XamlTaskbarCtrl::GetSystemTrayWidthDip();
@@ -803,7 +889,6 @@ namespace winrings
                         m_config.touchpadPhysLeftClickTrigger ? 1 : 0, m_config.shakeTriggerEnabled ? 1 : 0,
                         m_config.hotCornerEnabled ? 1 : 0, m_config.dragToSnapEnabled ? 1 : 0);
 
-                    HWND ctrlHwnd = m_controlHwnd;
                     XamlTaskbarCtrl::StartAttachment(m_shellModule, m_config, [ctrlHwnd]() {
                         if (ctrlHwnd && IsWindow(ctrlHwnd))
                             PostMessageW(ctrlHwnd, kMsgXamlFirstAttached, 0, 0);
@@ -839,7 +924,11 @@ namespace winrings
 
                 XamlTaskbarCtrl::SetTrayMetricsCallback(nullptr);
                 if (m_controlHwnd && !m_previewMode)
+                {
                     KillTimer(m_controlHwnd, kTopBarRetryTimerId);
+                    KillTimer(m_controlHwnd, kWakeFollowUpTimerId);
+                }
+                m_wakeFollowUpRemaining = 0;
 
                 m_armed = false;
                 m_topBarHookAppliedGen = 0;
@@ -851,6 +940,7 @@ namespace winrings
                 m_input.Uninstall();
                 if (!m_previewMode)
                 {
+                    TopBarHook::RemoveTrayTopLock(m_shellModule);
                     m_windowSnap.Shutdown();
                     m_gestures.Shutdown();
                     m_mediaIsland.Shutdown();
@@ -964,11 +1054,47 @@ namespace winrings
                 }
             }
 
+            void SyncTrayTopBarLock()
+            {
+                if (m_previewMode)
+                    return;
+                HWND ctrlHwnd = m_controlHwnd;
+                const bool wantLock = m_config.topBarEnabled && m_config.topBarDockTop;
+                TopBarHook::SyncTrayTopLock(
+                    m_shellModule,
+                    wantLock,
+                    m_config.topBarHeightDip,
+                    [ctrlHwnd]() {
+                        if (ctrlHwnd && IsWindow(ctrlHwnd))
+                            PostMessageW(ctrlHwnd, kMsgPowerOrDisplayResume, 0, 0);
+                    });
+            }
+
+            void TriggerImmediateTopBarWakeSync(const wchar_t* reason)
+            {
+                if (!m_armed || m_previewMode)
+                    return;
+                ShellDiagLog(L"ShellCtrl", L"Wake/Display sync (%s) topBar=%d dockTop=%d",
+                    reason ? reason : L"Unknown",
+                    m_config.topBarEnabled ? 1 : 0,
+                    m_config.topBarDockTop ? 1 : 0);
+                m_input.UpdateCachedDpiScale(QueryPrimaryDpiScale());
+                ApplyTopBarState(true);
+                m_fullWorkArea.OnWakeOrUnlockImmediate();
+                m_mediaIsland.RefreshLayoutAndVisibility();
+                if (m_controlHwnd)
+                {
+                    m_wakeFollowUpRemaining = 2;
+                    SetTimer(m_controlHwnd, kWakeFollowUpTimerId, 120, nullptr);
+                }
+            }
+
             void ApplyTopBarState(bool forceHookReapply)
             {
                 if (m_previewMode)
                     return;
 
+                SyncTrayTopBarLock();
                 XamlTaskbarCtrl::ApplyConfig(m_config);
                 if (!XamlTaskbarCtrl::IsAttached())
                     XamlTaskbarCtrl::EnsureAttachRetry(m_shellModule, m_config);
@@ -1071,7 +1197,9 @@ namespace winrings
             POINT m_watchdogLastCursorPt{};
             bool m_watchdogHasCursorPt = false;
             ULONGLONG m_watchdogLastMouseHookTick = 0;
+            ULONGLONG m_lastWatchdogReinstallTick = 0;
             int m_watchdogMouseStallTicks = 0;
+            int m_wakeFollowUpRemaining = 0;
             PendingClosedSnap m_pendingClosedSnap;
             bool m_hasPendingClosedSnap = false;
         };

@@ -158,4 +158,101 @@ namespace winrings
                 items.begin() + static_cast<std::ptrdiff_t>(fromIdx + 1));
         }
     }
+
+    inline bool HasSuffixInsensitiveW(const std::wstring& s, const wchar_t* suffix) noexcept
+    {
+        if (!suffix)
+            return false;
+        const size_t slen = wcslen(suffix);
+        if (s.size() < slen)
+            return false;
+        return _wcsicmp(s.c_str() + (s.size() - slen), suffix) == 0;
+    }
+
+    inline std::wstring ChooseSearchPinPath(
+        const std::wstring& rawPath,
+        const std::wstring& resolvedTarget,
+        const std::wstring& resolvedArgs)
+    {
+        if (HasSuffixInsensitiveW(rawPath, L".lnk") &&
+            !resolvedTarget.empty() &&
+            resolvedArgs.empty() &&
+            HasSuffixInsensitiveW(resolvedTarget, L".exe"))
+        {
+            return resolvedTarget;
+        }
+        return rawPath;
+    }
+
+    inline int FindPinnedSlotIndexByPath(
+        const std::vector<PinnedSlotConfig>& pinnedSlots,
+        const std::wstring& primaryPath,
+        const std::wstring& altPath = L"")
+    {
+        const std::wstring normPrimary = NormalizeWindowsSlashes(primaryPath);
+        const std::wstring normAlt = NormalizeWindowsSlashes(altPath);
+        if (normPrimary.empty() && normAlt.empty())
+            return -1;
+
+        for (size_t i = 0; i < pinnedSlots.size(); ++i)
+        {
+            const auto& slot = pinnedSlots[i];
+            if (slot.kind != SlotKind::App || slot.pathOrUrl.empty())
+                continue;
+            const std::wstring normSlot = NormalizeWindowsSlashes(slot.pathOrUrl);
+            if ((!normPrimary.empty() && _wcsicmp(normSlot.c_str(), normPrimary.c_str()) == 0) ||
+                (!normAlt.empty() && _wcsicmp(normSlot.c_str(), normAlt.c_str()) == 0))
+            {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    }
+
+    struct TopBarPosClampResult
+    {
+        bool modifiedMove = false;
+        bool modifiedSize = false;
+        int y = 0;
+        int cy = 0;
+    };
+
+    inline TopBarPosClampResult ClampTopDockedTaskbarWindowPos(
+        bool lockTop,
+        int monTop,
+        int monBottom,
+        int targetHeightPx,
+        int maxClampHeightPx,
+        bool hasMove,
+        bool hasSize,
+        int reqY,
+        int reqCy,
+        int curTop,
+        int curCy) noexcept
+    {
+        TopBarPosClampResult res{};
+        res.y = reqY;
+        res.cy = reqCy;
+        if (!lockTop)
+            return res;
+
+        const int effectiveY = hasMove ? reqY : curTop;
+        const int effectiveCy = hasSize ? reqCy : curCy;
+
+        // Clamp bottom-edge drops back to monTop while leaving top auto-hide (y < monTop) untouched.
+        if (effectiveY > monTop + 4 && effectiveY < monBottom)
+        {
+            res.y = monTop;
+            res.modifiedMove = true;
+        }
+
+        // Clamp transient full-height resets (e.g. 48 DIP on wake) without disturbing auto-hide slivers (<= 4 px).
+        if (targetHeightPx >= 24 && effectiveCy > targetHeightPx + 2 && effectiveCy <= maxClampHeightPx)
+        {
+            res.cy = targetHeightPx;
+            res.modifiedSize = true;
+        }
+
+        return res;
+    }
 } // namespace winrings

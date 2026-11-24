@@ -33,12 +33,17 @@ namespace winrings
         Shutdown();
     }
 
-    bool FullWorkAreaCtrl::Initialize(HMODULE shellModule, const SwitcherConfig& cfg, std::function<void()> onVisibilityChanged)
+    bool FullWorkAreaCtrl::Initialize(
+        HMODULE shellModule,
+        const SwitcherConfig& cfg,
+        std::function<void()> onVisibilityChanged,
+        std::function<void()> onPowerOrDisplayResume)
     {
         Shutdown();
         m_module = shellModule;
         m_config = cfg;
         m_onVisibilityChanged = std::move(onVisibilityChanged);
+        m_onPowerOrDisplayResume = std::move(onPowerOrDisplayResume);
         s_instance = this;
 
         WNDCLASSEXW wc{ sizeof(wc) };
@@ -157,6 +162,31 @@ namespace winrings
         m_enabled = false;
         m_hidden = false;
         m_hTray = nullptr;
+        m_lastShift = -1;
+        m_lastIsTop = -1;
+        m_onPowerOrDisplayResume = nullptr;
+    }
+
+    void FullWorkAreaCtrl::OnWakeOrUnlockImmediate()
+    {
+        m_lastShift = -1;
+        m_lastIsTop = -1;
+        m_trayBurstCount = 0;
+        m_workBurstCount = 0;
+
+        if (!m_enabled)
+            return;
+
+        ApplyFullWorkArea();
+        if (m_centerMode && !m_hidden)
+            ApplyCenteredPill();
+
+        if (m_hwnd)
+        {
+            ScheduleWorkAreaApply(80);
+            if (m_centerMode && !m_hidden)
+                ScheduleTrayApply(60);
+        }
     }
 
     RECT FullWorkAreaCtrl::GetPrimaryTaskbarRect() const noexcept
@@ -303,7 +333,7 @@ namespace winrings
         if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF)
             return;
         if (hwnd == self->m_hTray || GetParent(hwnd) == self->m_hTray)
-            self->ScheduleTrayApply(120);
+            self->ScheduleTrayApply(16);
     }
 
     void FullWorkAreaCtrl::RefreshTrayHandle()
@@ -314,6 +344,7 @@ namespace winrings
             UnhookTray();
             m_hTray = h;
             m_lastShift = -1;
+            m_lastIsTop = -1;
         }
         if (m_hTray && m_centerMode && !m_hTrayHook)
         {
@@ -342,12 +373,21 @@ namespace winrings
             }
         }
 
-        if (actualShift == m_lastShift && monW == m_lastMonW && trayH == m_lastTrayH)
+        const bool isTop = (m_config.topBarEnabled && m_config.topBarDockTop)
+            ? true
+            : (trayTop <= monTop + 4);
+        const int isTopInt = isTop ? 1 : 0;
+
+        if (actualShift == m_lastShift && monW == m_lastMonW &&
+            trayH == m_lastTrayH && isTopInt == m_lastIsTop)
+        {
             return;
+        }
 
         m_lastShift = actualShift;
         m_lastMonW = monW;
         m_lastTrayH = trayH;
+        m_lastIsTop = isTopInt;
 
         int rgnLeft = (monW * 27) / 100;
         int rgnRight = monW - actualShift;
@@ -357,7 +397,6 @@ namespace winrings
             rgnRight = monW;
         }
 
-        const bool isTop = (trayTop <= monTop + 4);
         const int y1 = isTop ? -18 : 0;
         const int y2 = isTop ? (trayH + 1) : (trayH + 19);
 
@@ -506,6 +545,7 @@ namespace winrings
             SetWindowRgn(hTray, nullptr, TRUE);
         }
         m_lastShift = -1;
+        m_lastIsTop = -1;
     }
 
     void FullWorkAreaCtrl::ToggleTaskbarVisibility()
@@ -592,38 +632,47 @@ namespace winrings
         if (msg == WM_SETTINGCHANGE && m_enabled)
         {
             if (!m_applyingWork && wp == SPI_SETWORKAREA && AnyMonitorNeedsFix())
-                ScheduleWorkAreaApply(150);
-            return 0;
-        }
-
-        if (msg == WM_DISPLAYCHANGE && m_enabled)
-        {
-            m_trayBurstCount = 0;
-            ScheduleWorkAreaApply(250);
-            if (m_centerMode)
-                ScheduleTrayApply(350);
-            return 0;
-        }
-
-        if (msg == WM_POWERBROADCAST && m_enabled)
-        {
-            if (wp == PBT_APMRESUMEAUTOMATIC || wp == PBT_APMRESUMESUSPEND)
             {
-                m_trayBurstCount = 0;
-                ScheduleWorkAreaApply(500);
-                if (m_centerMode)
-                    ScheduleTrayApply(650);
+                if (m_workBurstCount == 0)
+                    ApplyFullWorkArea();
+                ScheduleWorkAreaApply(60);
             }
             return 0;
         }
 
-        if (m_msgTaskbarCreated && msg == m_msgTaskbarCreated && m_enabled)
+        if (msg == WM_DISPLAYCHANGE)
+        {
+            OnWakeOrUnlockImmediate();
+            if (m_onPowerOrDisplayResume)
+                m_onPowerOrDisplayResume();
+            return 0;
+        }
+
+        if (msg == WM_POWERBROADCAST)
+        {
+            if (wp == PBT_APMRESUMEAUTOMATIC || wp == PBT_APMRESUMESUSPEND || wp == PBT_APMRESUMECRITICAL)
+            {
+                OnWakeOrUnlockImmediate();
+                if (m_onPowerOrDisplayResume)
+                    m_onPowerOrDisplayResume();
+            }
+            return TRUE;
+        }
+
+        if (m_msgTaskbarCreated && msg == m_msgTaskbarCreated)
         {
             m_hTray = nullptr;
+            m_lastShift = -1;
+            m_lastIsTop = -1;
             m_trayBurstCount = 0;
-            ScheduleWorkAreaApply(500);
-            if (m_centerMode)
-                ScheduleTrayApply(700);
+            if (m_enabled)
+            {
+                ScheduleWorkAreaApply(80);
+                if (m_centerMode)
+                    ScheduleTrayApply(120);
+            }
+            if (m_onPowerOrDisplayResume)
+                m_onPowerOrDisplayResume();
             return 0;
         }
 

@@ -1,5 +1,6 @@
 #include "TopBarHook.h"
 
+#include <CommCtrl.h>
 #include <ShellScalingApi.h>
 #include <shellapi.h>
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <mutex>
 #include <vector>
 
+#include "../shared/SlotMatching.h"
 #include "ShellController.h"
 
 namespace winrings
@@ -1100,5 +1102,253 @@ namespace winrings
 
         ShellDiagLog(L"TopBarHook", L"RestoreAndUnhook complete (ranOnUi=%d origDip=%d)",
             ranOnUi ? 1 : 0, origDip);
+    }
+
+    namespace
+    {
+        constexpr UINT_PTR kTrayTopLockSubclassId = 0x5752544Cull; // 'WRTL'
+        std::atomic<bool> g_trayLockEnabled{ false };
+        std::atomic<int> g_trayLockHeightDip{ 28 };
+        std::atomic<HWND> g_trayLockedHwnd{ nullptr };
+        std::atomic<bool> g_inTraySnap{ false };
+        std::mutex g_trayWakeMutex;
+        std::function<void()> g_trayWakeCallback;
+
+        bool ComputeTrayTopMetrics(
+            HWND tray,
+            int clampedDip,
+            MONITORINFO& outMi,
+            int& outTargetPx,
+            int& outMaxClampPx) noexcept
+        {
+            if (!tray || !IsWindow(tray))
+                return false;
+            HMONITOR hMon = MonitorFromWindow(tray, MONITOR_DEFAULTTOPRIMARY);
+            outMi = MONITORINFO{ sizeof(outMi) };
+            if (!GetMonitorInfoW(hMon, &outMi))
+                return false;
+            UINT dpi = GetDpiForWindow(tray);
+            if (dpi < 72)
+                dpi = QueryMonitorDpi(hMon);
+            if (dpi < 72)
+                dpi = 96;
+            const int targetDip = (std::clamp)(clampedDip, 24, 48);
+            outTargetPx = MulDiv(targetDip, static_cast<int>(dpi), 96);
+            outMaxClampPx = MulDiv(72, static_cast<int>(dpi), 96);
+            return true;
+        }
+
+        void SnapTrayWindowToTopIfNeeded(HWND tray) noexcept
+        {
+            if (!tray || !IsWindow(tray) ||
+                !g_trayLockEnabled.load(std::memory_order_acquire) ||
+                g_inTraySnap.load(std::memory_order_acquire))
+            {
+                return;
+            }
+
+            MONITORINFO mi{};
+            int targetPx = 0;
+            int maxClampPx = 0;
+            RECT rc{};
+            if (!GetWindowRect(tray, &rc) ||
+                !ComputeTrayTopMetrics(tray, g_trayLockHeightDip.load(std::memory_order_acquire), mi, targetPx, maxClampPx))
+            {
+                return;
+            }
+
+            const int curH = rc.bottom - rc.top;
+            const TopBarPosClampResult clamp = ClampTopDockedTaskbarWindowPos(
+                true,
+                mi.rcMonitor.top,
+                mi.rcMonitor.bottom,
+                targetPx,
+                maxClampPx,
+                true,
+                true,
+                rc.top,
+                curH,
+                rc.top,
+                curH);
+
+            if (clamp.modifiedMove || clamp.modifiedSize)
+            {
+                const int monW = mi.rcMonitor.right - mi.rcMonitor.left;
+                g_inTraySnap.store(true, std::memory_order_release);
+                SetWindowPos(
+                    tray, nullptr,
+                    mi.rcMonitor.left, clamp.y, monW, clamp.cy,
+                    SWP_NOZORDER | SWP_NOACTIVATE);
+                g_inTraySnap.store(false, std::memory_order_release);
+            }
+        }
+
+        void InvokeTrayWakeCallback() noexcept
+        {
+            std::function<void()> cb;
+            {
+                std::lock_guard<std::mutex> lock(g_trayWakeMutex);
+                cb = g_trayWakeCallback;
+            }
+            if (cb)
+            {
+                try { cb(); }
+                catch (...) {}
+            }
+        }
+
+        LRESULT CALLBACK TrayTopLockSubclassProc(
+            HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+            UINT_PTR uIdSubclass, DWORD_PTR) noexcept
+        {
+            if (msg == WM_NCDESTROY)
+            {
+                RemoveWindowSubclass(hwnd, TrayTopLockSubclassProc, uIdSubclass);
+                HWND expected = hwnd;
+                g_trayLockedHwnd.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
+                return DefSubclassProc(hwnd, msg, wp, lp);
+            }
+
+            if (msg == WM_WINDOWPOSCHANGING &&
+                lp != 0 &&
+                g_trayLockEnabled.load(std::memory_order_acquire) &&
+                !g_inTraySnap.load(std::memory_order_acquire))
+            {
+                auto* pos = reinterpret_cast<WINDOWPOS*>(lp);
+                MONITORINFO mi{};
+                int targetPx = 0;
+                int maxClampPx = 0;
+                RECT curRc{};
+                if (GetWindowRect(hwnd, &curRc) &&
+                    ComputeTrayTopMetrics(hwnd, g_trayLockHeightDip.load(std::memory_order_acquire), mi, targetPx, maxClampPx))
+                {
+                    const bool hasMove = (pos->flags & SWP_NOMOVE) == 0;
+                    const bool hasSize = (pos->flags & SWP_NOSIZE) == 0;
+                    const TopBarPosClampResult clamp = ClampTopDockedTaskbarWindowPos(
+                        true,
+                        mi.rcMonitor.top,
+                        mi.rcMonitor.bottom,
+                        targetPx,
+                        maxClampPx,
+                        hasMove,
+                        hasSize,
+                        pos->y,
+                        pos->cy,
+                        curRc.top,
+                        curRc.bottom - curRc.top);
+
+                    if (clamp.modifiedMove)
+                    {
+                        pos->y = clamp.y;
+                        pos->flags &= ~SWP_NOMOVE;
+                    }
+                    if (clamp.modifiedSize)
+                    {
+                        pos->cy = clamp.cy;
+                        pos->flags &= ~SWP_NOSIZE;
+                    }
+                }
+            }
+
+            if (msg == WM_DISPLAYCHANGE ||
+                (msg == WM_POWERBROADCAST &&
+                 (wp == PBT_APMRESUMEAUTOMATIC || wp == PBT_APMRESUMESUSPEND || wp == PBT_APMRESUMECRITICAL)))
+            {
+                const LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+                SnapTrayWindowToTopIfNeeded(hwnd);
+                InvokeTrayWakeCallback();
+                return r;
+            }
+
+            return DefSubclassProc(hwnd, msg, wp, lp);
+        }
+    } // namespace
+
+    bool TopBarHook::SyncTrayTopLock(
+        HMODULE shellModule,
+        bool lockTop,
+        int heightDip,
+        std::function<void()> onTrayWakeOrDisplay)
+    {
+        g_trayLockHeightDip.store((std::clamp)(heightDip, 24, 48), std::memory_order_release);
+        g_trayLockEnabled.store(lockTop, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(g_trayWakeMutex);
+            g_trayWakeCallback = std::move(onTrayWakeOrDisplay);
+        }
+
+        if (!lockTop)
+        {
+            RemoveTrayTopLock(shellModule);
+            return true;
+        }
+
+        auto ok = std::make_shared<std::atomic<bool>>(false);
+        const bool dispatched = RunOnPrimaryTaskbarThread(shellModule, [ok]() {
+            HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+            if (!tray || !IsWindow(tray))
+                return;
+            DWORD pid = 0;
+            const DWORD tid = GetWindowThreadProcessId(tray, &pid);
+            if (pid != GetCurrentProcessId() || tid != GetCurrentThreadId())
+                return;
+
+            const HWND prev = g_trayLockedHwnd.load(std::memory_order_acquire);
+            if (prev && prev != tray && IsWindow(prev))
+                RemoveWindowSubclass(prev, TrayTopLockSubclassProc, kTrayTopLockSubclassId);
+
+            if (prev != tray)
+            {
+                if (SetWindowSubclass(tray, TrayTopLockSubclassProc, kTrayTopLockSubclassId, 0))
+                {
+                    g_trayLockedHwnd.store(tray, std::memory_order_release);
+                    ShellDiagLog(L"TopBarHook", L"Installed Shell_TrayWnd top-lock subclass (hwnd=0x%p h=%d)",
+                        tray, g_trayLockHeightDip.load(std::memory_order_acquire));
+                    ok->store(true, std::memory_order_release);
+                }
+            }
+            else
+            {
+                ok->store(true, std::memory_order_release);
+            }
+
+            SnapTrayWindowToTopIfNeeded(tray);
+        }, 1500);
+
+        return dispatched && ok->load(std::memory_order_acquire);
+    }
+
+    void TopBarHook::RemoveTrayTopLock(HMODULE shellModule)
+    {
+        g_trayLockEnabled.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(g_trayWakeMutex);
+            g_trayWakeCallback = nullptr;
+        }
+
+        const HWND prev = g_trayLockedHwnd.load(std::memory_order_acquire);
+        if (!prev)
+            return;
+
+        RunOnPrimaryTaskbarThread(shellModule, []() {
+            const HWND locked = g_trayLockedHwnd.exchange(nullptr, std::memory_order_acq_rel);
+            if (locked && IsWindow(locked))
+            {
+                DWORD pid = 0;
+                const DWORD tid = GetWindowThreadProcessId(locked, &pid);
+                if (pid == GetCurrentProcessId() && tid == GetCurrentThreadId())
+                    RemoveWindowSubclass(locked, TrayTopLockSubclassProc, kTrayTopLockSubclassId);
+            }
+            HWND curTray = FindWindowW(L"Shell_TrayWnd", nullptr);
+            if (curTray && curTray != locked && IsWindow(curTray))
+            {
+                DWORD pid = 0;
+                const DWORD tid = GetWindowThreadProcessId(curTray, &pid);
+                if (pid == GetCurrentProcessId() && tid == GetCurrentThreadId())
+                    RemoveWindowSubclass(curTray, TrayTopLockSubclassProc, kTrayTopLockSubclassId);
+            }
+            if (locked)
+                ShellDiagLog(L"TopBarHook", L"Removed Shell_TrayWnd top-lock subclass (hwnd=0x%p)", locked);
+        }, 1500);
     }
 } // namespace winrings

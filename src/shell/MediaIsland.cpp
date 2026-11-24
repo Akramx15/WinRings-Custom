@@ -1482,6 +1482,11 @@ namespace winrings
             UpdateWindowBoundsAndRender();
             return 0;
 
+        case WM_POWERBROADCAST:
+            if (wp == PBT_APMRESUMEAUTOMATIC || wp == PBT_APMRESUMESUSPEND || wp == PBT_APMRESUMECRITICAL)
+                UpdateWindowBoundsAndRender();
+            return TRUE;
+
         case WM_LBUTTONDOWN:
         {
             if ((GetKeyState(VK_MENU) & 0x8000) != 0)

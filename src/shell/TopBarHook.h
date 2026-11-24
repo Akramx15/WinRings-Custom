@@ -26,5 +26,14 @@ namespace winrings
         static void RefreshSecondaryTaskbars() noexcept;
         static bool InstallSystemTrayHook() noexcept;
         static bool RepositionTrayPopupIfNeeded(HWND hwndPopup, int preferredAnchorX = (-2147483647 - 1)) noexcept;
+
+        // Synchronous Win32 subclass on Shell_TrayWnd (independent of Taskbar.dll PE hooks)
+        // to eliminate bottom-edge flashes on Sleep/Wake or DisplayChange when Top Bar is enabled.
+        static bool SyncTrayTopLock(
+            HMODULE shellModule,
+            bool lockTop,
+            int heightDip,
+            std::function<void()> onTrayWakeOrDisplay = nullptr);
+        static void RemoveTrayTopLock(HMODULE shellModule);
     };
 } // namespace winrings

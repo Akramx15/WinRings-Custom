@@ -1,6 +1,14 @@
-# WinRings-Custom — Known Issues & Resolutions (`v3.0.4.0`)
+# WinRings-Custom — Known Issues & Resolutions (`v3.0.5.0`)
 
-Record of all issues tracked from Obsidian notes and live user testing across `v3.0.1.0` through `v3.0.4.0`.
+Record of all issues tracked from Obsidian notes and live user testing across `v3.0.1.0` through `v3.0.5.0`.
+
+## Fixed in `v3.0.5.0`
+
+| # | Reported Issue | Root Cause | Resolution in `v3.0.5.0` |
+| :-: | :--- | :--- | :--- |
+| **1** | **Top Minimal Bar flashes to the bottom edge after waking from Sleep** | On Sleep/Wake (`WM_POWERBROADCAST` / `WM_DISPLAYCHANGE`), Windows 11's taskbar temporarily repositions/resizes `Shell_TrayWnd` while `FullWorkAreaCtrl` waited `500–650 ms` to reapply `SetWindowRgn`/work area, `ShellController`'s `HWND_MESSAGE` window missed top-level power/display broadcasts, and `XamlTaskbarCtrl`'s `1500 ms` timer re-synced slowly. | Added a 3-layer zero-flash wake defense: (1) synchronous `Shell_TrayWnd` `WM_WINDOWPOSCHANGING` subclass (`TopBarHook::SyncTrayTopLock`, independent of `Taskbar.dll` PE hooks) clamping bottom drops to `monTop` and target height before a single frame paints, (2) immediate `0 ms` `FullWorkAreaCtrl::OnWakeOrUnlockImmediate` + instant `WM_POWERBROADCAST` refresh in `MediaIsland`, and (3) `ShellController::TriggerImmediateTopBarWakeSync` wired to `WM_POWERBROADCAST`, `WM_DISPLAYCHANGE`, `WINRINGS_CMD_REFRESH_INPUT` (wake/unlock), and settle passes at `+120 ms` / `+320 ms`. |
+| **2** | **Search Arc right-click menu lacked `Pin to Ring` (and `Open`)** | `RingOverlay::ShowContextMenuAt` on `m_searchArcActive` cards only exposed `Run as Administrator` and `Open File Location`. | Added `Open` and `Pin to Ring` / `Unpin from Ring` (`CmdSearchOpen`, `CmdSearchTogglePin`) to the Search Arc menu with smart `.lnk`-to-`.exe` resolution (`ChooseSearchPinPath`) and duplicate-pin detection (`FindPinnedSlotIndexByPath`). |
+| **3** | **Watchdog spams `ReinstallHooks()` every 2s while an elevated (Admin) app is focused** | When an elevated application (e.g., Antigravity Run as Administrator) holds focus, Windows UIPI blocks `WH_MOUSE_LL` callbacks to medium-IL `explorer.exe` while `GetCursorPos` still advances, causing `ShellController`'s cursor-heartbeat check to mistake UIPI blocking for silent hook eviction. | Added `IsElevatedOrSecureDesktopBlockingHooks` (`OpenInputDesktop` + `OpenProcess`/`TokenElevation` check for foreground & cursor windows) plus a `10 s` reinstall cooldown so UIPI-blocked periods never spam `ReinstallHooks()`, and clarified the OS UIPI behavior to the user. |
 
 ## Fixed in `v3.0.4.0`
 
