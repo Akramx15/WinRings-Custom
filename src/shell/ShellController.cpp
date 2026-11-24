@@ -311,6 +311,12 @@ namespace winrings
                     case WINRINGS_CMD_REFRESH_INPUT:
                         m_input.SetSuspended(false);
                         m_input.ResetTransientState();
+                        if (!m_input.AreHooksInstalled())
+                            m_input.ReinstallHooks();
+                        m_gestures.EnsureDeviceRegistration(true);
+                        m_watchdogHasCursorPt = false;
+                        m_watchdogMouseStallTicks = 0;
+                        m_watchdogLastMouseHookTick = m_input.LastMouseHookTick();
                         return TRUE;
 
                     case WINRINGS_CMD_RELOAD_CONFIG:
@@ -353,6 +359,49 @@ namespace winrings
                         {
                             m_gestures.EnsureDeviceRegistration();
                             m_input.UpdateCachedDpiScale(QueryPrimaryDpiScale());
+
+                            if (!m_input.AreHooksInstalled())
+                            {
+                                ShellDiagLog(L"ShellCtrl", L"Watchdog: input hooks missing -> reinstalling");
+                                m_input.ReinstallHooks();
+                                m_watchdogMouseStallTicks = 0;
+                                m_watchdogLastMouseHookTick = m_input.LastMouseHookTick();
+                            }
+                            else if (!m_input.IsSuspended())
+                            {
+                                POINT cur{};
+                                if (GetCursorPos(&cur))
+                                {
+                                    const ULONGLONG hookTick = m_input.LastMouseHookTick();
+                                    if (m_watchdogHasCursorPt &&
+                                        (cur.x != m_watchdogLastCursorPt.x || cur.y != m_watchdogLastCursorPt.y))
+                                    {
+                                        if (hookTick == m_watchdogLastMouseHookTick)
+                                        {
+                                            ++m_watchdogMouseStallTicks;
+                                            if (m_watchdogMouseStallTicks >= 2)
+                                            {
+                                                ShellDiagLog(L"ShellCtrl", L"Watchdog: cursor moved without WH_MOUSE_LL callbacks -> reinstalling hooks");
+                                                m_input.ReinstallHooks();
+                                                m_watchdogMouseStallTicks = 0;
+                                                m_watchdogLastMouseHookTick = m_input.LastMouseHookTick();
+                                            }
+                                        }
+                                        else
+                                        {
+                                            m_watchdogMouseStallTicks = 0;
+                                            m_watchdogLastMouseHookTick = hookTick;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        m_watchdogMouseStallTicks = 0;
+                                        m_watchdogLastMouseHookTick = hookTick;
+                                    }
+                                    m_watchdogLastCursorPt = cur;
+                                    m_watchdogHasCursorPt = true;
+                                }
+                            }
                         }
                         return 0;
                     }
@@ -689,9 +738,6 @@ namespace winrings
                         m_windowSnap.CancelActiveDrag();
                 };
 
-                m_input.Install(m_config, std::move(inputCb));
-                m_input.UpdateCachedDpiScale(QueryPrimaryDpiScale());
-                m_input.SetSuspended(false);
                 m_armed = true;
 
                 if (!forPreview)
@@ -765,8 +811,18 @@ namespace winrings
                     ++m_topBarDesiredGen;
                     SetTimer(m_controlHwnd, kTopBarRetryTimerId, 1000, nullptr);
                     ApplyTopBarState(true);
-                    PostStatusToHost(WINRINGS_DLL_STATUS_READY);
                 }
+
+                // Install global LL hooks after heavy UI/COM init so hook callbacks never stall at boot.
+                m_input.Install(m_config, std::move(inputCb));
+                m_input.UpdateCachedDpiScale(QueryPrimaryDpiScale());
+                m_input.SetSuspended(false);
+                m_watchdogHasCursorPt = false;
+                m_watchdogMouseStallTicks = 0;
+                m_watchdogLastMouseHookTick = m_input.LastMouseHookTick();
+
+                if (!forPreview)
+                    PostStatusToHost(WINRINGS_DLL_STATUS_READY);
             }
 
             void Disarm(bool restoreTopBar, bool notifyHost)
@@ -1012,6 +1068,10 @@ namespace winrings
             POINT m_pendingShakePt{};
             HWND m_pendingOpenSnapHwnd = nullptr;
             POINT m_pendingOpenSnapPt{};
+            POINT m_watchdogLastCursorPt{};
+            bool m_watchdogHasCursorPt = false;
+            ULONGLONG m_watchdogLastMouseHookTick = 0;
+            int m_watchdogMouseStallTicks = 0;
             PendingClosedSnap m_pendingClosedSnap;
             bool m_hasPendingClosedSnap = false;
         };

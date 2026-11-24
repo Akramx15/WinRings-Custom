@@ -1,4 +1,4 @@
-# WinRings-Custom Features (`v3.0.3.0`)
+# WinRings-Custom Features (`v3.0.4.0`)
 
 `WinRings-Custom` combines **upstream `WinRings v3.0.0`** (`WCA` native acrylic + 3D beveled glass edges, `m_outsideClickPending` click-vs-drag guard, `isRingDragActive` reorder guard, `explorer.exe` folder icon fix, slim core binary) with Akram's unified Windows 11 desktop enhancements:
 
@@ -40,8 +40,8 @@
 
 - **Win Key Start Replacement (`winKeyTrigger`):** Pressing Windows key opens WinRings instead of Start Menu (deployed alongside HKCU Open-Shell neutralization).
 - **Direct Window Switch (`directSwitchEnabled`):** `Alt + F` (configurable to `Win + F` or `Alt + Q`) cycles windows immediately without rendering a switcher popup, freezing MRU order until modifier release.
-- **Touchpad Physical Left-Click, Corner Tap & 2-Finger Volume (`ELAN06FA` HID):** Parses raw HID touchpad button & contact coordinates to distinguish physical left-click button presses from touchpad tap-to-click (`touchpadPhysLeftClickTrigger`), optional corner taps (`touchpadCornerTrigger`), and 2-finger scroll over Media Island, with automatic `GetRegisteredRawInputDevices` self-healing.
-- **2D Mouse Shake (`shakeTriggerEnabled`):** Runs directly inside `InputEngine` (`WH_MOUSE_LL`, cached DPI scale, fixed circular buffer, zero Win32 API calls per pixel) so Volume/Quick Settings flyouts can never steal it; recognizes horizontal, diagonal (thumb shake), and circular shake motions without accidental false triggers.
+- **Touchpad Physical Left-Click, Corner Tap & 2-Finger Volume (`ELAN06FA` HID):** Parses raw HID touchpad button & contact coordinates to distinguish physical left-click button presses from touchpad tap-to-click (`touchpadPhysLeftClickTrigger`), optional corner taps (`touchpadCornerTrigger` with serial multi-contact tracking and `350 ms` idle reset), and 2-finger scroll over Media Island, with automatic `GetRegisteredRawInputDevices` self-healing.
+- **2D Mouse Shake (`shakeTriggerEnabled`):** Runs directly inside `InputEngine` (`WH_MOUSE_LL`, cached DPI scale, fixed circular buffer, zero Win32 API calls per pixel, `selfInjected`-only filter so PTP `LLMHF_INJECTED` cursor moves work reliably, live `GetAsyncKeyState` button check, and cursor-heartbeat watchdog recovery against boot hook eviction).
 - **GNOME Hot Corner (`hotCornerEnabled`):** Triggers Task View (`Win+Tab`) or WinRings only when flicking with deliberate velocity/pressure into the configured top corner (`Top-Left` / `Top-Right`).
 
 ---
@@ -53,6 +53,6 @@
   - Dragging a **pinned Ring slot** inside the ring reorders pins normally; pulling it past `outerRadius + dragToSnapTearOffDip` after `dragToSnapHoldMs` cancels temporary reordering cleanly and live-drags the open app—or optionally launches & auto-snaps a closed pinned app/folder/Recycle Bin/website (`dragToSnapLaunchClosed`) via `HSHELL_*` events (zero polling).
   - Releasing on a screen edge commits immediately with `WM_LBUTTONUP` preserved (never swallowed) and deferred snap execution: by default (`dragToSnapUseSnapAssist = false`), **Direct Pixel-Perfect Snap** compensates DWM extended frame borders (`DWMWA_EXTENDED_FRAME_BOUNDS`) via `ComputeDirectSnapRect` and sets immediate foreground focus with **zero stolen clicks**; toggling `dragToSnapUseSnapAssist = true` uses native `Win + Arrow` + Windows 11 Snap Assist. Releasing outside any edge drops the window cleanly at its live position.
 - **Window Card `X` Close Button:** Clicking the `X` close badge on hovered outer-arc window cards closes that window immediately without activating it.
-- **Ring & Card Context Actions:** Right-click slots/windows for **Run as Administrator**, **Close Window**, **End Task** (`TerminateProcessByPid`), **Toggle Top Minimal Bar**, and **Show Media Island**.
+- **Ring, Window Card & Search Arc Context Actions:** Right-click main slots/windows for **Run as Administrator**, **Close Window**, **End Task** (`TerminateProcessByPid`), **Toggle Top Minimal Bar**, and **Show Media Island**; right-clicking any result in the top **Search Arc** (`m_searchArcActive`) preserves the arc while offering **`Run as Administrator`** and **`Open File Location`** (resolving `.lnk` shortcuts and UWP `shell:AppsFolder` targets).
 - **Selection Indicator Styles (`selectionIndicator`):** `GlowOnly`, `SectorWedge` (restored classic v1 blue wedge accent), or `PointerLine`.
 - **Ultra-Fast No-Blur Mode (`disableRingBlur`):** Fully disables native `WCA` backdrop (`SW_HIDE`), `Windows::UI::Composition` blur, and synthetic grain noise (`useNoise = false`) for solid high-contrast rendering and minimal GPU work.

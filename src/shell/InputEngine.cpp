@@ -5,6 +5,8 @@
 
 namespace winrings
 {
+    void ShellDiagLog(const wchar_t* tag, const wchar_t* fmt, ...) noexcept;
+
     namespace
     {
         constexpr ULONG_PTR kWinRingsInjectedTag = 0x57524E47ull;
@@ -26,13 +28,38 @@ namespace winrings
         QueryPerformanceFrequency(&freq);
         m_qpcFreq = freq.QuadPart > 0 ? freq.QuadPart : 1;
         s_instance = this;
+        return ReinstallHooks();
+    }
+
+    bool InputEngine::ReinstallHooks()
+    {
+        ResetTransientState();
+        if (m_keyboardHook)
+        {
+            UnhookWindowsHookEx(m_keyboardHook);
+            m_keyboardHook = nullptr;
+        }
+        if (m_mouseHook)
+        {
+            UnhookWindowsHookEx(m_mouseHook);
+            m_mouseHook = nullptr;
+        }
 
         HMODULE selfMod = nullptr;
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
             reinterpret_cast<LPCWSTR>(&KeyboardHookProc), &selfMod);
 
         m_keyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardHookProc, selfMod, 0);
+        const DWORD kbErr = m_keyboardHook ? 0 : GetLastError();
         m_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseHookProc, selfMod, 0);
+        const DWORD msErr = m_mouseHook ? 0 : GetLastError();
+
+        const ULONGLONG now = GetTickCount64();
+        m_lastKeyboardHookTick = now;
+        m_lastMouseHookTick = now;
+
+        ShellDiagLog(L"Input", L"Hooks installed kb=0x%p ms=0x%p (kbErr=%lu msErr=%lu)",
+            m_keyboardHook, m_mouseHook, kbErr, msErr);
         return m_keyboardHook != nullptr && m_mouseHook != nullptr;
     }
 
@@ -94,9 +121,6 @@ namespace winrings
         m_outsideClickOrigin = {};
         m_winKeyDown = false;
         m_winComboUsed = false;
-        m_lbtnHeld = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-        m_rbtnHeld = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-        m_mbtnHeld = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
         ResetShakeState();
         if (m_directSwitchActive)
         {
@@ -236,6 +260,8 @@ namespace winrings
         const auto* kb = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lp);
         if (!kb)
             return CallNextHookEx(m_keyboardHook, code, wp, lp);
+
+        m_lastKeyboardHookTick = GetTickCount64();
 
         const bool injected = (kb->flags & LLKHF_INJECTED) != 0;
         if (injected && kb->dwExtraInfo == kWinRingsInjectedTag)
@@ -456,45 +482,24 @@ namespace winrings
         if (!ms)
             return CallNextHookEx(m_mouseHook, code, wp, lp);
 
+        const ULONGLONG now = GetTickCount64();
+        m_lastMouseHookTick = now;
+
         const UINT msg = static_cast<UINT>(wp);
         const bool injectedMouse = (ms->flags & LLMHF_INJECTED) != 0;
+        const bool selfInjected = injectedMouse && (ms->dwExtraInfo == kWinRingsInjectedTag);
         const bool ringOpen = m_callbacks.isRingOpen && m_callbacks.isRingOpen();
 
-        if (!injectedMouse && (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) &&
+        if (!selfInjected && (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) &&
             m_callbacks.shouldSuppressTouchpadMouse && m_callbacks.shouldSuppressTouchpadMouse(msg))
         {
             return 1;
         }
 
-        if (msg == WM_LBUTTONDOWN)
-        {
-            m_lbtnHeld = true;
+        if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN)
             ResetShakeState();
-        }
-        else if (msg == WM_LBUTTONUP)
-        {
-            m_lbtnHeld = false;
-        }
-        else if (msg == WM_RBUTTONDOWN)
-        {
-            m_rbtnHeld = true;
-            ResetShakeState();
-        }
-        else if (msg == WM_RBUTTONUP)
-        {
-            m_rbtnHeld = false;
-        }
-        else if (msg == WM_MBUTTONDOWN)
-        {
-            m_mbtnHeld = true;
-            ResetShakeState();
-        }
-        else if (msg == WM_MBUTTONUP)
-        {
-            m_mbtnHeld = false;
-        }
 
-        if (!injectedMouse && m_winKeyDown &&
+        if (!selfInjected && m_winKeyDown &&
             (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN ||
              msg == WM_XBUTTONDOWN || msg == WM_MOUSEWHEEL))
         {
@@ -516,7 +521,7 @@ namespace winrings
                     m_outsideClickPending = false;
                 }
             }
-            if (!injectedMouse && m_callbacks.onUserPointerDelta)
+            if (!selfInjected && m_callbacks.onUserPointerDelta)
                 m_callbacks.onUserPointerDelta();
             if (ringOpen || m_triggerHeld)
             {
@@ -526,14 +531,17 @@ namespace winrings
 
             if (m_config.shakeTriggerEnabled)
             {
-                if (injectedMouse)
+                if (selfInjected)
                 {
                     ResetShakeState();
                 }
                 else
                 {
-                    const ULONGLONG now = GetTickCount64();
-                    if (snapDragActive || ringOpen || m_triggerHeld || m_lbtnHeld || m_rbtnHeld || m_mbtnHeld ||
+                    const bool anyBtnHeldNow =
+                        (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 ||
+                        (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0 ||
+                        (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+                    if (snapDragActive || ringOpen || m_triggerHeld || anyBtnHeldNow ||
                         now < m_shakeCooldownUntil)
                     {
                         ResetShakeState();

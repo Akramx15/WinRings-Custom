@@ -797,6 +797,16 @@ static void TestSnapEdgeClassification()
 
     const SnapRect rClamp = ComputeDirectSnapRect(SnapZone::Left, 0, 0, 1920, 1080, -5, 99, 7, 7);
     CHECK(rClamp.left == 0 && rClamp.top == -32 && rClamp.right == 967 && rClamp.bottom == 1087);
+
+    // Touchpad normalized corner hit-testing (top-right / top-left)
+    CHECK(IsNormalizedPointInTouchpadCorner(0.90, 0.08, true, 18));
+    CHECK(IsNormalizedPointInTouchpadCorner(0.82, 0.18, true, 18));
+    CHECK(!IsNormalizedPointInTouchpadCorner(0.80, 0.10, true, 18));
+    CHECK(!IsNormalizedPointInTouchpadCorner(0.90, 0.25, true, 18));
+    CHECK(IsNormalizedPointInTouchpadCorner(0.10, 0.10, false, 18));
+    CHECK(!IsNormalizedPointInTouchpadCorner(0.50, 0.10, false, 18));
+    CHECK(!IsNormalizedPointInTouchpadCorner(-0.05, 0.05, false, 18));
+    CHECK(!IsNormalizedPointInTouchpadCorner(1.05, 0.05, true, 18));
 }
 
 int wmain()

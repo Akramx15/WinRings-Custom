@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstring>
 
+#include "../shared/RadialMath.h"
+
 namespace winrings
 {
     void ShellDiagLog(const wchar_t* tag, const wchar_t* fmt, ...) noexcept;
@@ -26,6 +28,7 @@ namespace winrings
         constexpr USHORT kUsageDigitizerTouchPad = 0x05;
         constexpr USHORT kUsageDigitizerFinger = 0x22;
         constexpr USHORT kUsageDigitizerTipSwitch = 0x42;
+        constexpr USHORT kUsageDigitizerContactId = 0x51;
         constexpr USHORT kUsageDigitizerContactCount = 0x54;
 
         bool HasUsage(const USAGE* list, ULONG count, USAGE target) noexcept
@@ -127,7 +130,7 @@ namespace winrings
         EnsureDeviceRegistration();
     }
 
-    void GestureEngine::EnsureDeviceRegistration()
+    void GestureEngine::EnsureDeviceRegistration(bool forceReRegister)
     {
         if (!m_hwnd || !IsWindow(m_hwnd))
             return;
@@ -138,33 +141,36 @@ namespace winrings
         if (!wantMouse && !wantHid)
             return;
 
-        UINT count = 0;
-        if (GetRegisteredRawInputDevices(nullptr, &count, sizeof(RAWINPUTDEVICE)) == static_cast<UINT>(-1) &&
-            GetLastError() != ERROR_INSUFFICIENT_BUFFER)
-        {
-            return;
-        }
-
-        std::vector<RAWINPUTDEVICE> devs(count);
-        if (count > 0)
-        {
-            const UINT actual = GetRegisteredRawInputDevices(devs.data(), &count, sizeof(RAWINPUTDEVICE));
-            if (actual == static_cast<UINT>(-1))
-                devs.clear();
-            else
-                devs.resize(actual);
-        }
-
         bool hasMouse = false;
         bool hasHid = false;
-        for (const auto& d : devs)
+        if (!forceReRegister)
         {
-            if (d.hwndTarget != m_hwnd || (d.dwFlags & RIDEV_REMOVE) != 0)
-                continue;
-            if (d.usUsagePage == kUsagePageGenericDesktop && d.usUsage == kUsageGenericMouse)
-                hasMouse = true;
-            else if (d.usUsagePage == kUsagePageDigitizer && d.usUsage == kUsageDigitizerTouchPad)
-                hasHid = true;
+            UINT count = 0;
+            if (GetRegisteredRawInputDevices(nullptr, &count, sizeof(RAWINPUTDEVICE)) == static_cast<UINT>(-1) &&
+                GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+            {
+                return;
+            }
+
+            std::vector<RAWINPUTDEVICE> devs(count);
+            if (count > 0)
+            {
+                const UINT actual = GetRegisteredRawInputDevices(devs.data(), &count, sizeof(RAWINPUTDEVICE));
+                if (actual == static_cast<UINT>(-1))
+                    devs.clear();
+                else
+                    devs.resize(actual);
+            }
+
+            for (const auto& d : devs)
+            {
+                if (d.hwndTarget != m_hwnd || (d.dwFlags & RIDEV_REMOVE) != 0)
+                    continue;
+                if (d.usUsagePage == kUsagePageGenericDesktop && d.usUsage == kUsageGenericMouse)
+                    hasMouse = true;
+                else if (d.usUsagePage == kUsagePageDigitizer && d.usUsage == kUsageDigitizerTouchPad)
+                    hasHid = true;
+            }
         }
 
         if (wantMouse && !hasMouse)
@@ -189,6 +195,12 @@ namespace winrings
             rid.dwFlags = RIDEV_INPUTSINK;
             rid.hwndTarget = m_hwnd;
             m_hidRegistered = (RegisterRawInputDevices(&rid, 1, sizeof(rid)) != FALSE);
+            if (m_hidRegistered)
+            {
+                m_hidCache.clear();
+                m_tpState = {};
+                m_physBtnDownNow = false;
+            }
             ShellDiagLog(L"Gesture", L"%s Touchpad HID RawInput ok=%d",
                 wasRegistered ? L"Recovered" : L"Registered", m_hidRegistered ? 1 : 0);
         }
@@ -391,6 +403,7 @@ namespace winrings
 
     const GestureEngine::TouchpadCaps& GestureEngine::GetOrInspectTouchpad(HANDLE hDevice)
     {
+        static const TouchpadCaps kInvalidCaps{};
         if (auto it = m_hidCache.find(hDevice); it != m_hidCache.end())
             return it->second;
 
@@ -398,8 +411,11 @@ namespace winrings
         RID_DEVICE_INFO devInfo{};
         devInfo.cbSize = sizeof(devInfo);
         UINT devInfoSize = sizeof(devInfo);
-        if (GetRawInputDeviceInfoW(hDevice, RIDI_DEVICEINFO, &devInfo, &devInfoSize) == static_cast<UINT>(-1) ||
-            devInfo.dwType != RIM_TYPEHID ||
+        if (GetRawInputDeviceInfoW(hDevice, RIDI_DEVICEINFO, &devInfo, &devInfoSize) == static_cast<UINT>(-1))
+        {
+            return kInvalidCaps;
+        }
+        if (devInfo.dwType != RIM_TYPEHID ||
             devInfo.hid.usUsagePage != kUsagePageDigitizer ||
             devInfo.hid.usUsage != kUsageDigitizerTouchPad)
         {
@@ -408,19 +424,16 @@ namespace winrings
 
         UINT ppSize = 0;
         if (GetRawInputDeviceInfoW(hDevice, RIDI_PREPARSEDDATA, nullptr, &ppSize) != 0 || ppSize == 0 || ppSize > 65536)
-            return m_hidCache.emplace(hDevice, std::move(info)).first->second;
+            return kInvalidCaps;
 
         info.preparsed.resize(ppSize);
         if (GetRawInputDeviceInfoW(hDevice, RIDI_PREPARSEDDATA, info.preparsed.data(), &ppSize) == static_cast<UINT>(-1))
-        {
-            info.preparsed.clear();
-            return m_hidCache.emplace(hDevice, std::move(info)).first->second;
-        }
+            return kInvalidCaps;
 
         PHIDP_PREPARSED_DATA pp = reinterpret_cast<PHIDP_PREPARSED_DATA>(info.preparsed.data());
         HIDP_CAPS caps{};
         if (HidP_GetCaps(pp, &caps) != HIDP_STATUS_SUCCESS)
-            return m_hidCache.emplace(hDevice, std::move(info)).first->second;
+            return kInvalidCaps;
 
         info.isTouchpad = true;
 
@@ -469,6 +482,11 @@ namespace winrings
                         info.hasContactCount = true;
                         info.contactCountLC = v.LinkCollection;
                     }
+                    else if (v.UsagePage == kUsagePageDigitizer && v.LinkCollection == info.tipLC &&
+                             vUsage == kUsageDigitizerContactId)
+                    {
+                        info.hasContactId = true;
+                    }
                     else if (v.UsagePage == kUsagePageGenericDesktop && v.LinkCollection == info.tipLC)
                     {
                         if (vUsage == kUsageGenericX)
@@ -487,6 +505,14 @@ namespace winrings
         }
 
         info.valid = info.hasButton1 || info.hasTipSwitch;
+        if (info.valid)
+        {
+            ShellDiagLog(L"Gesture",
+                L"Touchpad HID ready: tipLC=%u x=%ld..%ld y=%ld..%ld btn=%d tip=%d cc=%d cid=%d",
+                info.tipLC, info.xMin, info.xMax, info.yMin, info.yMax,
+                info.hasButton1 ? 1 : 0, info.hasTipSwitch ? 1 : 0,
+                info.hasContactCount ? 1 : 0, info.hasContactId ? 1 : 0);
+        }
         return m_hidCache.emplace(hDevice, std::move(info)).first->second;
     }
 
@@ -502,6 +528,20 @@ namespace winrings
 
         PHIDP_PREPARSED_DATA pp = reinterpret_cast<PHIDP_PREPARSED_DATA>(const_cast<BYTE*>(caps.preparsed.data()));
         const ULONGLONG now = GetTickCount64();
+
+        if (m_tpState.lastHidTick != 0 && (now - m_tpState.lastHidTick) > 350)
+        {
+            m_tpState.prevTipDown = false;
+            m_tpState.prevPhysBtn = false;
+            m_tpState.cornerTapTracking = false;
+            m_tpState.twoFingerScrollActive = false;
+            m_tpState.twoFingerOverIsland = false;
+            m_tpState.twoFingerAccumY = 0.0;
+            m_tpState.activeFrameContacts = 0;
+            m_tpState.remainingContinuationReports = 0;
+            m_physBtnDownNow = false;
+        }
+        m_tpState.lastHidTick = now;
 
         for (DWORD idx = 0; idx < hid.dwCount; ++idx)
         {
@@ -526,16 +566,36 @@ namespace winrings
                     tipDown = HasUsage(usages, uCount, kUsageDigitizerTipSwitch);
             }
 
-            ULONG contactCount = tipDown ? 1u : 0u;
+            ULONG rawContactCount = 0;
+            bool hasExplicitCC = false;
             if (caps.hasContactCount)
             {
                 ULONG ccVal = 0;
                 if (HidP_GetUsageValue(HidP_Input, kUsagePageDigitizer, caps.contactCountLC,
                     kUsageDigitizerContactCount, &ccVal, pp, report, reportLen) == HIDP_STATUS_SUCCESS)
                 {
-                    contactCount = ccVal;
+                    hasExplicitCC = true;
+                    rawContactCount = ccVal;
                 }
             }
+
+            const bool isContinuationReport = hasExplicitCC && (rawContactCount == 0) &&
+                (m_tpState.remainingContinuationReports > 0);
+            if (!isContinuationReport)
+            {
+                m_tpState.remainingContinuationReports =
+                    (hasExplicitCC && rawContactCount > 1) ? (rawContactCount - 1u) : 0u;
+                if (hasExplicitCC)
+                    m_tpState.activeFrameContacts = rawContactCount;
+            }
+            else
+            {
+                --m_tpState.remainingContinuationReports;
+            }
+
+            const ULONG effectiveContacts = hasExplicitCC
+                ? (isContinuationReport ? m_tpState.activeFrameContacts : rawContactCount)
+                : (tipDown ? 1u : 0u);
 
             ULONG rawX = 0;
             ULONG rawY = 0;
@@ -549,6 +609,9 @@ namespace winrings
             const double nx = (std::clamp)(static_cast<double>(static_cast<LONG>(rawX) - caps.xMin) / xSpan, 0.0, 1.0);
             const double ny = (std::clamp)(static_cast<double>(static_cast<LONG>(rawY) - caps.yMin) / ySpan, 0.0, 1.0);
 
+            if (isContinuationReport)
+                continue;
+
             // Physical Left-Click Trigger (preserves bottom-right physical right-click zone)
             if (m_config.touchpadPhysLeftClickTrigger)
             {
@@ -560,6 +623,7 @@ namespace winrings
                     if ((now - m_tpState.lastTriggerTick) >= 220)
                     {
                         m_tpState.lastTriggerTick = now;
+                        ShellDiagLog(L"Gesture", L"Touchpad phys-left trigger nx=%.2f ny=%.2f", nx, ny);
                         if (m_callbacks.onToggleRing)
                             m_callbacks.onToggleRing();
                     }
@@ -582,12 +646,12 @@ namespace winrings
             // Touchpad Corner Tap Trigger
             if (m_config.touchpadCornerTrigger)
             {
-                const double frac = static_cast<double>(m_config.touchpadCornerSizePct) / 100.0;
-                const bool inCorner = (m_config.touchpadCornerPos == TouchpadCornerPos::TopLeft)
-                    ? (nx <= frac && ny <= frac)
-                    : (nx >= (1.0 - frac) && ny <= frac);
+                const bool inCorner = IsNormalizedPointInTouchpadCorner(
+                    nx, ny,
+                    m_config.touchpadCornerPos == TouchpadCornerPos::TopRight,
+                    m_config.touchpadCornerSizePct);
 
-                if (tipDown && !m_tpState.prevTipDown && contactCount == 1 && !physBtn && inCorner)
+                if (tipDown && !m_tpState.prevTipDown && effectiveContacts == 1 && !physBtn && inCorner)
                 {
                     m_tpState.cornerTapTracking = true;
                     m_tpState.cornerStartTick = now;
@@ -596,10 +660,10 @@ namespace winrings
                 }
                 else if (m_tpState.cornerTapTracking && tipDown)
                 {
-                    if (contactCount > 1 || physBtn ||
-                        std::abs(nx - m_tpState.cornerStartX) > 0.05 ||
-                        std::abs(ny - m_tpState.cornerStartY) > 0.05 ||
-                        (now - m_tpState.cornerStartTick) > 260)
+                    if (effectiveContacts > 1 || physBtn ||
+                        std::abs(nx - m_tpState.cornerStartX) > 0.10 ||
+                        std::abs(ny - m_tpState.cornerStartY) > 0.10 ||
+                        (now - m_tpState.cornerStartTick) > 380)
                     {
                         m_tpState.cornerTapTracking = false;
                     }
@@ -607,10 +671,12 @@ namespace winrings
                 else if (!tipDown && m_tpState.prevTipDown && m_tpState.cornerTapTracking)
                 {
                     m_tpState.cornerTapTracking = false;
-                    if ((now - m_tpState.cornerStartTick) <= 260 && (now - m_tpState.lastTriggerTick) >= 220)
+                    if ((now - m_tpState.cornerStartTick) <= 380 && (now - m_tpState.lastTriggerTick) >= 220)
                     {
                         m_tpState.lastTriggerTick = now;
-                        m_suppressClickUntilTick = now + 140;
+                        m_suppressClickUntilTick = now + 180;
+                        ShellDiagLog(L"Gesture", L"Touchpad corner tap trigger nx=%.2f ny=%.2f",
+                            m_tpState.cornerStartX, m_tpState.cornerStartY);
                         if (m_callbacks.onToggleRing)
                             m_callbacks.onToggleRing();
                     }
@@ -624,7 +690,7 @@ namespace winrings
             // Two-finger touchpad vertical scroll over Media Island -> Master Volume control
             if (wantMediaScroll)
             {
-                if (contactCount == 2 && tipDown && !physBtn)
+                if (effectiveContacts == 2 && tipDown && !physBtn)
                 {
                     if (!m_tpState.twoFingerScrollActive || (now - m_tpState.twoFingerLastTick) > 250)
                     {
@@ -663,7 +729,7 @@ namespace winrings
                     }
                     m_tpState.twoFingerLastTick = now;
                 }
-                else if (contactCount != 0 || !tipDown || physBtn)
+                else if (effectiveContacts != 0 || !tipDown || physBtn)
                 {
                     m_tpState.twoFingerScrollActive = false;
                     m_tpState.twoFingerOverIsland = false;

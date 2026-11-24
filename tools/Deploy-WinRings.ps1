@@ -98,6 +98,24 @@ if (-not $NoLaunch) {
     Write-Host "==> Restarting explorer.exe to unload any pinned WinRingsShell.dll..."
     Stop-Process -Name 'explorer' -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 800
+
+    # Clean up any residual uninstalled Open-Shell autostart entries or leftover locked DLL folder.
+    foreach ($runPath in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run')) {
+        if (Test-Path -LiteralPath $runPath) {
+            try {
+                Remove-ItemProperty -LiteralPath $runPath -Name 'Open-Shell Start Menu' -Force -ErrorAction SilentlyContinue
+            } catch {
+            }
+        }
+    }
+    $openShellDir = 'C:\Program Files\Open-Shell'
+    if ((Test-Path -LiteralPath $openShellDir) -and -not (Test-Path -LiteralPath (Join-Path $openShellDir 'StartMenu.exe'))) {
+        try {
+            Remove-Item -LiteralPath $openShellDir -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "==> Removed residual Open-Shell directory"
+        } catch {
+        }
+    }
 }
 
 Write-Host "==> Staging binaries to $installDir..."

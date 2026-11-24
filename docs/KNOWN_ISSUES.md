@@ -1,6 +1,15 @@
-# WinRings-Custom — Known Issues & Resolutions (`v3.0.3.0`)
+# WinRings-Custom — Known Issues & Resolutions (`v3.0.4.0`)
 
-Record of all issues tracked from Obsidian notes and live user testing across `v3.0.1.0`, `v3.0.2.0`, and `v3.0.3.0`.
+Record of all issues tracked from Obsidian notes and live user testing across `v3.0.1.0` through `v3.0.4.0`.
+
+## Fixed in `v3.0.4.0`
+
+| # | Reported Issue | Root Cause | Resolution in `v3.0.4.0` |
+| :-: | :--- | :--- | :--- |
+| **1** | **Open-Shell steals `Win` key again after reboot** | Open-Shell `4.4.198` (`{E7FAF594-3859-4121-9030-EDB2880E562F}`) stayed installed with `HKLM\...\Run` launching `StartMenu.exe -autorun` and resetting `HKCU\Software\OpenShell\...\WinKey = ClassicMenu` on boot. | Permanently uninstalled Open-Shell via MSI and removed `HKLM`/`HKCU` Run entries, `HKCU\Software\OpenShell`, and the installation folder; updated `Deploy-WinRings.ps1` with ongoing Open-Shell autostart/directory cleanup hygiene. |
+| **2** | **Mouse Shake stops working after reboot (and with Precision Touchpad / UAC)** | `InputEngine::HandleMouse` reset shake state on every `LLMHF_INJECTED` packet (dropping Precision Touchpad cursor events), cached `m_lbtnHeld/m_rbtnHeld/m_mbtnHeld` could wedge on missed UAC/suppressed `WM_*BUTTONUP`, and `Arm()` installed LL hooks before heavy boot init without silent hook-eviction recovery. | Distinguished `selfInjected` (`kWinRingsInjectedTag`) from OS Precision Touchpad packets, replaced cached button flags with live `GetAsyncKeyState`, moved `m_input.Install` after heavy module init, and added cursor-heartbeat hook eviction detection + `ReinstallHooks()` in `ShellController`. |
+| **3** | **Top-Right Touchpad corner tap stops triggering** | On `ELAN06FA` hybrid serial HID reports, `ContactCount == 0` continuation reports for extra fingers overwrote `prevTipDown`, missed lift reports across idle/UAC wedged state, corner tolerances (`0.05` / `260 ms`) were overly strict, and transient boot `GetRawInputDeviceInfoW` failures were permanently cached. | Added `remainingContinuationReports` frame tracking, `350 ms` idle state reset, pure `IsNormalizedPointInTouchpadCorner` math with practical (`0.10` / `380 ms`) tolerances, transient-failure non-caching in `GetOrInspectTouchpad`, and RawInput cache reset on recovery. |
+| **4** | **Search Arc right-click fell back to general menu** | `RingOverlay::ShowContextMenuAt` only checked `card.window` and called `ClearSubmenu()` immediately before inspecting Search Arc `subSlot` cards. | Hit-tested submenu cards via `HitTestSubmenu(localDip)` before clearing, added `Run as Administrator` and `Open File Location` (`SlotModel::ResolveShortcutTarget`, `SlotModel::LaunchRunAsAdmin`, enhanced `SlotModel::RevealInExplorer` for `.lnk` & UWP/KnownFolder AUMIDs) while preserving the Search Arc on dismiss. |
 
 ## Fixed in `v3.0.3.0`
 

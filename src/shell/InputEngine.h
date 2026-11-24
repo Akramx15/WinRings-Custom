@@ -49,8 +49,12 @@ namespace winrings
 
         bool Install(const SwitcherConfig& config, Callbacks callbacks);
         void Uninstall();
+        bool ReinstallHooks();
         void UpdateConfig(const SwitcherConfig& config);
         void SetSuspended(bool suspended) noexcept;
+        bool IsSuspended() const noexcept { return m_suspended; }
+        bool AreHooksInstalled() const noexcept { return m_keyboardHook != nullptr && m_mouseHook != nullptr; }
+        ULONGLONG LastMouseHookTick() const noexcept { return m_lastMouseHookTick; }
         void UpdateCachedDpiScale(double dpiScale) noexcept;
         void ResetShakeState() noexcept;
         void ResetTransientState() noexcept;
@@ -93,10 +97,9 @@ namespace winrings
         bool m_winKeyDown = false;
         bool m_winComboUsed = false;
         bool m_directSwitchActive = false;
-        bool m_lbtnHeld = false;
-        bool m_rbtnHeld = false;
-        bool m_mbtnHeld = false;
         double m_cachedDpiScale = 1.0;
+        ULONGLONG m_lastMouseHookTick = 0;
+        ULONGLONG m_lastKeyboardHookTick = 0;
 
         bool m_hasShakeLastPt = false;
         POINT m_shakeLastPt{};

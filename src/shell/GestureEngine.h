@@ -30,7 +30,7 @@ namespace winrings
         bool Initialize(HWND hwnd, const SwitcherConfig& cfg, Callbacks callbacks);
         void UpdateConfig(const SwitcherConfig& cfg);
         void Shutdown();
-        void EnsureDeviceRegistration();
+        void EnsureDeviceRegistration(bool forceReRegister = false);
 
         void OnRawInput(LPARAM lParam);
         bool ShouldSuppressMouseButton(UINT msg);
@@ -50,6 +50,7 @@ namespace winrings
             bool hasButton1 = false;
             bool hasTipSwitch = false;
             bool hasContactCount = false;
+            bool hasContactId = false;
         };
 
         struct TouchpadRuntimeState
@@ -57,10 +58,13 @@ namespace winrings
             bool prevPhysBtn = false;
             bool prevTipDown = false;
             bool cornerTapTracking = false;
+            ULONGLONG lastHidTick = 0;
             ULONGLONG cornerStartTick = 0;
             double cornerStartX = 0.0;
             double cornerStartY = 0.0;
             ULONGLONG lastTriggerTick = 0;
+            ULONG activeFrameContacts = 0;
+            ULONG remainingContinuationReports = 0;
 
             bool twoFingerScrollActive = false;
             bool twoFingerOverIsland = false;

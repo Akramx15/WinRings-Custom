@@ -2624,14 +2624,36 @@ namespace winrings
     {
         if (!m_hwnd)
             return;
-        HWND hoveredWinHwnd = nullptr;
-        if (m_selectedSubIndex >= 0 && m_selectedSubIndex < static_cast<int>(m_submenuCards.size()))
+
+        const PointD localDip{
+            kCenterDip + (screenPt.x - m_centerScreenPhysical.x) / m_dpiScale,
+            kCenterDip + (screenPt.y - m_centerScreenPhysical.y) / m_dpiScale
+        };
+        const int hitSub = HitTestSubmenu(localDip);
+
+        bool hasSearchResult = false;
+        RingSlot searchSlot;
+        if (m_searchArcActive && hitSub >= 0 && hitSub < static_cast<int>(m_submenuCards.size()))
         {
-            const auto& card = m_submenuCards[static_cast<size_t>(m_selectedSubIndex)];
+            const auto& card = m_submenuCards[static_cast<size_t>(hitSub)];
+            if (card.subSlot && !card.subSlot->pathOrUrl.empty())
+            {
+                searchSlot = *card.subSlot;
+                hasSearchResult = true;
+            }
+        }
+
+        HWND hoveredWinHwnd = nullptr;
+        const int subIdx = (hitSub >= 0) ? hitSub : m_selectedSubIndex;
+        if (!hasSearchResult && subIdx >= 0 && subIdx < static_cast<int>(m_submenuCards.size()))
+        {
+            const auto& card = m_submenuCards[static_cast<size_t>(subIdx)];
             if (card.window && card.window->hwnd && IsWindow(card.window->hwnd))
                 hoveredWinHwnd = card.window->hwnd;
         }
-        ClearSubmenu();
+
+        if (!hasSearchResult)
+            ClearSubmenu();
         m_contextMenuOpen = true;
 
         HMENU menu = CreatePopupMenu();
@@ -2654,6 +2676,8 @@ namespace winrings
             CmdRunAsAdmin = 207,
             CmdCloseSubWindow = 208,
             CmdEndTask = 209,
+            CmdSearchRunAsAdmin = 210,
+            CmdSearchOpenLocation = 211,
             CmdNewCollection = 300,
             CmdToggleTopBar = 301,
             CmdSettings = 302,
@@ -2664,8 +2688,14 @@ namespace winrings
         RingSlot targetSlot;
         DWORD targetPid = 0;
         std::wstring adminTarget;
-        const bool hasSlot = (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_visibleSlots.size()));
-        if (hasSlot)
+        const bool hasSlot = !hasSearchResult &&
+            (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_visibleSlots.size()));
+        if (hasSearchResult)
+        {
+            AppendMenuW(menu, MF_STRING, CmdSearchRunAsAdmin, L"Run as Administrator");
+            AppendMenuW(menu, MF_STRING, CmdSearchOpenLocation, L"Open File Location");
+        }
+        else if (hasSlot)
         {
             targetSlot = m_visibleSlots[static_cast<size_t>(m_selectedIndex)];
             const HWND actionWinHwnd = hoveredWinHwnd
@@ -2787,7 +2817,17 @@ namespace winrings
         case CmdRunAsAdmin:
             Dismiss();
             if (!adminTarget.empty())
-                ShellExecuteW(nullptr, L"runas", adminTarget.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                SlotModel::LaunchRunAsAdmin(adminTarget);
+            break;
+        case CmdSearchRunAsAdmin:
+            Dismiss();
+            if (!searchSlot.pathOrUrl.empty())
+                SlotModel::LaunchRunAsAdmin(searchSlot.pathOrUrl);
+            break;
+        case CmdSearchOpenLocation:
+            Dismiss();
+            if (!searchSlot.pathOrUrl.empty())
+                SlotModel::RevealInExplorer(searchSlot.pathOrUrl);
             break;
         case CmdMinAll:
             for (const auto& w : targetSlot.windows) WindowTracker::MinimizeWindow(w.hwnd);

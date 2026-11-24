@@ -722,4 +722,16 @@ namespace winrings
             return SnapRect{ workLeft, workTop, workRight, workBottom };
         }
     }
+
+    inline bool IsNormalizedPointInTouchpadCorner(
+        double nx, double ny, bool isTopRight, int cornerSizePct) noexcept
+    {
+        constexpr double kEps = 1e-9;
+        const double frac = static_cast<double>(std::clamp(cornerSizePct, 10, 35)) / 100.0;
+        if (nx < 0.0 || nx > 1.0 || ny < 0.0 || ny > 1.0)
+            return false;
+        return isTopRight
+            ? (nx >= (1.0 - frac - kEps) && ny <= (frac + kEps))
+            : (nx <= (frac + kEps) && ny <= (frac + kEps));
+    }
 } // namespace winrings

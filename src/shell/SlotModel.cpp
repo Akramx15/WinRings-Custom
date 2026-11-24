@@ -63,6 +63,111 @@ namespace winrings
             aliases.push_back(t);
         }
 
+        bool EndsWithInsensitiveW(const std::wstring& s, const wchar_t* suffix) noexcept
+        {
+            const size_t slen = wcslen(suffix);
+            if (s.size() < slen)
+                return false;
+            return _wcsicmp(s.c_str() + (s.size() - slen), suffix) == 0;
+        }
+
+        bool ResolveKnownFolderAumidPath(const std::wstring& aumid, std::wstring& outPath)
+        {
+            outPath.clear();
+            if (aumid.size() >= 38 && aumid[0] == L'{')
+            {
+                const size_t closeBrace = aumid.find(L'}');
+                if (closeBrace != std::wstring::npos && closeBrace < 64)
+                {
+                    const std::wstring guidText = aumid.substr(0, closeBrace + 1);
+                    KNOWNFOLDERID folderId{};
+                    if (SUCCEEDED(CLSIDFromString(guidText.c_str(), &folderId)))
+                    {
+                        PWSTR folderPath = nullptr;
+                        if (SUCCEEDED(SHGetKnownFolderPath(folderId, 0, nullptr, &folderPath)) && folderPath)
+                        {
+                            std::wstring rel = aumid.substr(closeBrace + 1);
+                            if (!rel.empty() && (rel[0] == L'\\' || rel[0] == L'/'))
+                                rel.erase(rel.begin());
+                            std::wstring candidate = folderPath;
+                            CoTaskMemFree(folderPath);
+                            if (!rel.empty())
+                            {
+                                if (!candidate.empty() && candidate.back() != L'\\' && candidate.back() != L'/')
+                                    candidate.push_back(L'\\');
+                                candidate += rel;
+                            }
+                            if (!candidate.empty() && GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
+                            {
+                                outPath = std::move(candidate);
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            if (aumid.size() >= 2 && aumid[1] == L':' && GetFileAttributesW(aumid.c_str()) != INVALID_FILE_ATTRIBUTES)
+            {
+                outPath = aumid;
+                return true;
+            }
+            return false;
+        }
+
+        bool ResolveAppxPackageInstallDir(const std::wstring& aumid, std::wstring& outDir)
+        {
+            outDir.clear();
+            const size_t bang = aumid.find(L'!');
+            if (bang == std::wstring::npos || bang == 0)
+                return false;
+            const std::wstring familyName = aumid.substr(0, bang);
+
+            using GetPackagesByPackageFamilyFn = LONG(WINAPI*)(PCWSTR, UINT32*, PWSTR*, UINT32*, WCHAR*);
+            using GetPackagePathByFullNameFn = LONG(WINAPI*)(PCWSTR, UINT32*, PWSTR);
+
+            auto findProc = [](const char* name) -> FARPROC {
+                if (HMODULE k32 = GetModuleHandleW(L"kernel32.dll"))
+                {
+                    if (FARPROC fn = GetProcAddress(k32, name))
+                        return fn;
+                }
+                HMODULE kb = GetModuleHandleW(L"kernelbase.dll");
+                return kb ? GetProcAddress(kb, name) : nullptr;
+            };
+
+            auto getPkgs = reinterpret_cast<GetPackagesByPackageFamilyFn>(findProc("GetPackagesByPackageFamily"));
+            auto getPkgPath = reinterpret_cast<GetPackagePathByFullNameFn>(findProc("GetPackagePathByFullName"));
+            if (!getPkgs || !getPkgPath)
+                return false;
+
+            UINT32 count = 0;
+            UINT32 bufLen = 0;
+            if (getPkgs(familyName.c_str(), &count, nullptr, &bufLen, nullptr) != ERROR_INSUFFICIENT_BUFFER ||
+                count == 0 || bufLen == 0)
+            {
+                return false;
+            }
+
+            std::vector<PWSTR> fullNames(count, nullptr);
+            std::vector<wchar_t> buf(bufLen, L'\0');
+            if (getPkgs(familyName.c_str(), &count, fullNames.data(), &bufLen, buf.data()) != ERROR_SUCCESS ||
+                count == 0 || !fullNames[0])
+            {
+                return false;
+            }
+
+            UINT32 pathLen = 0;
+            if (getPkgPath(fullNames[0], &pathLen, nullptr) != ERROR_INSUFFICIENT_BUFFER || pathLen == 0)
+                return false;
+
+            std::vector<wchar_t> pathBuf(pathLen + 1, L'\0');
+            if (getPkgPath(fullNames[0], &pathLen, pathBuf.data()) != ERROR_SUCCESS || !pathBuf[0])
+                return false;
+
+            outDir = pathBuf.data();
+            return !outDir.empty();
+        }
+
         void PopulateSearchAliases(RingSlot& slot, const std::wstring& configuredLabel,
             const std::wstring& exePath, const AppIndex* appIndex)
         {
@@ -440,6 +545,51 @@ namespace winrings
         return slots;
     }
 
+    bool SlotModel::ResolveShortcutTarget(
+        const std::wstring& lnkPath,
+        std::wstring& outTargetPath,
+        std::wstring& outArguments,
+        std::wstring& outWorkingDir)
+    {
+        outTargetPath.clear();
+        outArguments.clear();
+        outWorkingDir.clear();
+
+        const std::wstring expandedLnk = ExpandEnv(lnkPath);
+        if (expandedLnk.empty() || !EndsWithInsensitiveW(expandedLnk, L".lnk"))
+            return false;
+
+        Microsoft::WRL::ComPtr<IShellLinkW> shellLink;
+        if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(shellLink.GetAddressOf()))) || !shellLink)
+        {
+            return false;
+        }
+        Microsoft::WRL::ComPtr<IPersistFile> pf;
+        if (FAILED(shellLink.As(&pf)) || !pf || FAILED(pf->Load(expandedLnk.c_str(), STGM_READ)))
+            return false;
+
+        wchar_t targetBuf[1024]{};
+        if (FAILED(shellLink->GetPath(targetBuf, _countof(targetBuf), nullptr, SLGP_RAWPATH)) || !targetBuf[0])
+            return false;
+
+        std::wstring target = ExpandEnv(targetBuf);
+        if (target.empty() || GetFileAttributesW(target.c_str()) == INVALID_FILE_ATTRIBUTES)
+            return false;
+
+        outTargetPath = std::move(target);
+
+        wchar_t argsBuf[2048]{};
+        if (SUCCEEDED(shellLink->GetArguments(argsBuf, _countof(argsBuf))) && argsBuf[0])
+            outArguments = argsBuf;
+
+        wchar_t workBuf[1024]{};
+        if (SUCCEEDED(shellLink->GetWorkingDirectory(workBuf, _countof(workBuf))) && workBuf[0])
+            outWorkingDir = ExpandEnv(workBuf);
+
+        return true;
+    }
+
     void SlotModel::LaunchPathOrUrl(const std::wstring& pathOrUrl, const std::wstring& arguments)
     {
         if (pathOrUrl.empty())
@@ -476,11 +626,127 @@ namespace winrings
         ShellExecuteExW(&sei);
     }
 
+    void SlotModel::LaunchRunAsAdmin(const std::wstring& pathOrUrl)
+    {
+        const std::wstring expanded = ExpandEnv(pathOrUrl);
+        if (expanded.empty())
+            return;
+
+        constexpr const wchar_t* kAppsPrefix = L"shell:AppsFolder\\";
+        if (expanded.rfind(kAppsPrefix, 0) == 0)
+        {
+            const std::wstring aumid = expanded.substr(wcslen(kAppsPrefix));
+            std::wstring resolved;
+            if (ResolveKnownFolderAumidPath(aumid, resolved))
+            {
+                SHELLEXECUTEINFOW sei{ sizeof(sei) };
+                sei.fMask = SEE_MASK_FLAG_NO_UI;
+                sei.lpVerb = L"runas";
+                sei.lpFile = resolved.c_str();
+                sei.nShow = SW_SHOWNORMAL;
+                ShellExecuteExW(&sei);
+                return;
+            }
+
+            SHELLEXECUTEINFOW sei{ sizeof(sei) };
+            sei.fMask = SEE_MASK_INVOKEIDLIST | SEE_MASK_FLAG_NO_UI;
+            sei.lpVerb = L"runas";
+            sei.lpFile = expanded.c_str();
+            sei.nShow = SW_SHOWNORMAL;
+            ShellExecuteExW(&sei);
+            return;
+        }
+
+        if (EndsWithInsensitiveW(expanded, L".lnk"))
+        {
+            std::wstring target;
+            std::wstring args;
+            std::wstring workDir;
+            if (ResolveShortcutTarget(expanded, target, args, workDir))
+            {
+                SHELLEXECUTEINFOW sei{ sizeof(sei) };
+                sei.fMask = SEE_MASK_FLAG_NO_UI;
+                sei.lpVerb = L"runas";
+                sei.lpFile = target.c_str();
+                sei.lpParameters = args.empty() ? nullptr : args.c_str();
+                sei.lpDirectory = workDir.empty() ? nullptr : workDir.c_str();
+                sei.nShow = SW_SHOWNORMAL;
+                ShellExecuteExW(&sei);
+                return;
+            }
+
+            SHELLEXECUTEINFOW sei{ sizeof(sei) };
+            sei.fMask = SEE_MASK_INVOKEIDLIST | SEE_MASK_FLAG_NO_UI;
+            sei.lpVerb = L"runas";
+            sei.lpFile = expanded.c_str();
+            sei.nShow = SW_SHOWNORMAL;
+            ShellExecuteExW(&sei);
+            return;
+        }
+
+        SHELLEXECUTEINFOW sei{ sizeof(sei) };
+        sei.fMask = SEE_MASK_FLAG_NO_UI;
+        sei.lpVerb = L"runas";
+        sei.lpFile = expanded.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+        ShellExecuteExW(&sei);
+    }
+
     void SlotModel::RevealInExplorer(const std::wstring& path)
     {
-        if (path.empty())
+        const std::wstring expanded = ExpandEnv(path);
+        if (expanded.empty())
             return;
-        const std::wstring params = L"/select,\"" + path + L"\"";
+
+        std::wstring revealTarget;
+        constexpr const wchar_t* kAppsPrefix = L"shell:AppsFolder\\";
+        if (expanded.rfind(kAppsPrefix, 0) == 0)
+        {
+            const std::wstring aumid = expanded.substr(wcslen(kAppsPrefix));
+            std::wstring resolved;
+            if (ResolveKnownFolderAumidPath(aumid, resolved))
+            {
+                revealTarget = std::move(resolved);
+            }
+            else
+            {
+                std::wstring pkgDir;
+                if (ResolveAppxPackageInstallDir(aumid, pkgDir))
+                {
+                    const std::wstring manifest = pkgDir + L"\\AppxManifest.xml";
+                    if (GetFileAttributesW(manifest.c_str()) != INVALID_FILE_ATTRIBUTES)
+                    {
+                        revealTarget = manifest;
+                    }
+                    else
+                    {
+                        ShellExecuteW(nullptr, L"open", L"explorer.exe", pkgDir.c_str(), nullptr, SW_SHOWNORMAL);
+                        return;
+                    }
+                }
+                else
+                {
+                    ShellExecuteW(nullptr, L"open", L"explorer.exe", L"shell:AppsFolder", nullptr, SW_SHOWNORMAL);
+                    return;
+                }
+            }
+        }
+        else if (EndsWithInsensitiveW(expanded, L".lnk"))
+        {
+            std::wstring target;
+            std::wstring args;
+            std::wstring workDir;
+            if (ResolveShortcutTarget(expanded, target, args, workDir))
+                revealTarget = std::move(target);
+            else
+                revealTarget = expanded;
+        }
+        else
+        {
+            revealTarget = expanded;
+        }
+
+        const std::wstring params = L"/select,\"" + revealTarget + L"\"";
         ShellExecuteW(nullptr, L"open", L"explorer.exe", params.c_str(), nullptr, SW_SHOWNORMAL);
     }
 

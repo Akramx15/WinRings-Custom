@@ -53,7 +53,13 @@ namespace winrings
         static bool ExplorerWindowMatchesFolder(const std::wstring& windowTitle, const std::wstring& expandedFolderPath);
         static bool ExplorerWindowMatchesRecycleBin(const std::wstring& windowTitle, const std::wstring& localizedRecycleBinName = L"Recycle Bin");
 
+        static bool ResolveShortcutTarget(
+            const std::wstring& lnkPath,
+            std::wstring& outTargetPath,
+            std::wstring& outArguments,
+            std::wstring& outWorkingDir);
         static void LaunchPathOrUrl(const std::wstring& pathOrUrl, const std::wstring& arguments = L"");
+        static void LaunchRunAsAdmin(const std::wstring& pathOrUrl);
         static void RevealInExplorer(const std::wstring& path);
         static bool SendToRecycleBin(const std::vector<std::wstring>& paths);
         static bool CopyFilesToFolder(const std::vector<std::wstring>& paths, const std::wstring& destFolder);
