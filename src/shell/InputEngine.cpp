@@ -94,9 +94,9 @@ namespace winrings
         m_outsideClickOrigin = {};
         m_winKeyDown = false;
         m_winComboUsed = false;
-        m_lbtnHeld = false;
-        m_rbtnHeld = false;
-        m_mbtnHeld = false;
+        m_lbtnHeld = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        m_rbtnHeld = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+        m_mbtnHeld = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
         ResetShakeState();
         if (m_directSwitchActive)
         {
@@ -724,8 +724,10 @@ namespace winrings
 
         if (msg == WM_LBUTTONUP && m_callbacks.isSnapFallbackDragActive && m_callbacks.isSnapFallbackDragActive())
         {
-            if (m_callbacks.onSnapFallbackDragRelease && m_callbacks.onSnapFallbackDragRelease(ms->pt))
-                return 1;
+            if (m_callbacks.onSnapFallbackDragRelease)
+                m_callbacks.onSnapFallbackDragRelease(ms->pt);
+            // Always let WM_LBUTTONUP propagate via CallNextHookEx so Windows and target apps
+            // never experience an unbalanced LMB down/up state or a swallowed next click.
         }
 
         // Click outside the overlay in sticky mode cancels only on clean click-release (not when dragging)

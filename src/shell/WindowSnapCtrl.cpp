@@ -1,6 +1,7 @@
 #include "WindowSnapCtrl.h"
 
 #include <ShellScalingApi.h>
+#include <dwmapi.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -16,9 +17,13 @@ namespace winrings
         constexpr wchar_t kSnapPreviewClassW[] = L"WinRings.SnapPreview.v1";
         constexpr ULONG_PTR kWinRingsInjectedTag = 0x57524E47ull;
 
-        constexpr UINT_PTR kTimerLiveProbe = 1;
+        constexpr UINT kMsgLiveDragMove = WM_APP + 101;
+        constexpr UINT kMsgLiveDragRelease = WM_APP + 102;
         constexpr UINT_PTR kTimerPendingExpire = 2;
         constexpr UINT_PTR kTimerSettleSnap = 3;
+        constexpr UINT_PTR kTimerMoveFlush = 4;
+        constexpr UINT_PTR kTimerDragWatchdog = 5;
+        constexpr ULONGLONG kLiveMoveThrottleMs = 14;
 
         using GetDpiForMonitorFn = HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*);
 
@@ -46,18 +51,37 @@ namespace winrings
             return _wcsicmp(s.c_str() + s.size() - 4, L".exe") == 0;
         }
 
-        const wchar_t* ZoneActionText(SnapZone zone, bool launchMode) noexcept
+        const wchar_t* ZoneActionText(SnapZone zone, bool launchMode, bool useSnapAssist) noexcept
         {
             switch (zone)
             {
             case SnapZone::Left:
-                return launchMode ? L"Launch & Snap Left + Snap Assist" : L"Snap Left + Snap Assist";
+                if (useSnapAssist)
+                    return launchMode ? L"Launch & Snap Left + Snap Assist" : L"Snap Left + Snap Assist";
+                return launchMode ? L"Launch & Snap Left" : L"Snap Left";
             case SnapZone::Right:
-                return launchMode ? L"Launch & Snap Right + Snap Assist" : L"Snap Right + Snap Assist";
+                if (useSnapAssist)
+                    return launchMode ? L"Launch & Snap Right + Snap Assist" : L"Snap Right + Snap Assist";
+                return launchMode ? L"Launch & Snap Right" : L"Snap Right";
             case SnapZone::TopMaximize:
                 return launchMode ? L"Launch & Maximize" : L"Maximize";
             default:
                 return L"";
+            }
+        }
+
+        void MeasureExtendedFramePads(HWND hwnd, int& pL, int& pT, int& pR, int& pB) noexcept
+        {
+            pL = pT = pR = pB = 0;
+            RECT winRc{};
+            RECT extRc{};
+            if (GetWindowRect(hwnd, &winRc) &&
+                SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &extRc, sizeof(extRc))))
+            {
+                pL = (std::clamp)(static_cast<int>(extRc.left - winRc.left), 0, 32);
+                pT = (std::clamp)(static_cast<int>(extRc.top - winRc.top), 0, 32);
+                pR = (std::clamp)(static_cast<int>(winRc.right - extRc.right), 0, 32);
+                pB = (std::clamp)(static_cast<int>(winRc.bottom - extRc.bottom), 0, 32);
             }
         }
 
@@ -200,49 +224,93 @@ namespace winrings
         CancelActiveDrag();
         ClearPendingLaunch();
 
-        if (IsIconic(targetHwnd) || IsZoomed(targetHwnd))
+        const bool wasMinimizedOrMax = (IsIconic(targetHwnd) != FALSE) || (IsZoomed(targetHwnd) != FALSE);
+        WINDOWPLACEMENT wp{ sizeof(wp) };
+        const bool hasWp = (GetWindowPlacement(targetHwnd, &wp) != FALSE);
+        if (wasMinimizedOrMax)
             ShowWindow(targetHwnd, SW_RESTORE);
 
         HMONITOR hMon = MonitorFromPoint(cursorPt, MONITOR_DEFAULTTONEAREST);
+        const double dpi = QueryMonitorDpiScale(hMon);
         MONITORINFO mi{ sizeof(mi) };
+        int winW = 900;
+        int winH = 620;
         if (GetMonitorInfoW(hMon, &mi))
         {
-            RECT rc{};
-            if (GetWindowRect(targetHwnd, &rc))
+            int rawW = 0;
+            int rawH = 0;
+            if (wasMinimizedOrMax && hasWp)
             {
-                const int workW = mi.rcWork.right - mi.rcWork.left;
-                const int workH = mi.rcWork.bottom - mi.rcWork.top;
-                const int winW = (std::min)(static_cast<int>(rc.right - rc.left), (std::max)(320, workW - 24));
-                const int winH = (std::min)(static_cast<int>(rc.bottom - rc.top), (std::max)(240, workH - 24));
-                int newX = cursorPt.x - winW / 2;
-                int newY = cursorPt.y - 18;
-                newX = (std::clamp)(newX, static_cast<int>(mi.rcWork.left) - winW / 3,
-                    static_cast<int>(mi.rcWork.right) - (std::max)(120, winW / 3));
-                newY = (std::clamp)(newY, static_cast<int>(mi.rcWork.top),
-                    (std::max)(static_cast<int>(mi.rcWork.top), static_cast<int>(mi.rcWork.bottom) - 48));
-                SetWindowPos(targetHwnd, HWND_TOP, newX, newY, winW, winH, SWP_SHOWWINDOW);
+                const int wpW = static_cast<int>(wp.rcNormalPosition.right - wp.rcNormalPosition.left);
+                const int wpH = static_cast<int>(wp.rcNormalPosition.bottom - wp.rcNormalPosition.top);
+                if (wpW >= 200 && wpH >= 150)
+                {
+                    rawW = wpW;
+                    rawH = wpH;
+                }
             }
+            if (rawW <= 0 || rawH <= 0)
+            {
+                RECT rc{};
+                if (GetWindowRect(targetHwnd, &rc))
+                {
+                    rawW = static_cast<int>(rc.right - rc.left);
+                    rawH = static_cast<int>(rc.bottom - rc.top);
+                }
+            }
+            if (rawW <= 0 || rawH <= 0)
+            {
+                rawW = 900;
+                rawH = 620;
+            }
+
+            const int workW = static_cast<int>(mi.rcWork.right - mi.rcWork.left);
+            const int workH = static_cast<int>(mi.rcWork.bottom - mi.rcWork.top);
+            winW = (std::min)(rawW, (std::max)(320, workW - 24));
+            winH = (std::min)(rawH, (std::max)(240, workH - 24));
         }
 
+        m_dragGrabOffsetX = winW / 2;
+        m_dragGrabOffsetY = (std::min)(winH / 4, static_cast<int>(std::round(18.0 * dpi)));
+        m_dragWinW = winW;
+        m_dragWinH = winH;
+
+        const int newX = cursorPt.x - m_dragGrabOffsetX;
+        int newY = cursorPt.y - m_dragGrabOffsetY;
+        if (mi.cbSize == sizeof(mi) && mi.rcWork.bottom > mi.rcWork.top)
+        {
+            newY = (std::clamp)(newY, static_cast<int>(mi.rcWork.top),
+                (std::max)(static_cast<int>(mi.rcWork.top), static_cast<int>(mi.rcWork.bottom) - 48));
+        }
+        SetWindowPos(targetHwnd, HWND_TOP, newX, newY, winW, winH, SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
         BringWindowForeground(targetHwnd);
 
         // If user already released LMB before async dispatch ran, apply snap immediately if over an edge.
         if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0)
         {
             HMONITOR snapMon = nullptr;
-            double dpi = 1.0;
-            const SnapZone zone = HitTestSnapZone(cursorPt, snapMon, dpi);
+            double snapDpi = 1.0;
+            const SnapZone zone = HitTestSnapZone(cursorPt, snapMon, snapDpi);
+            (void)snapDpi;
             if (zone != SnapZone::None)
-                ApplyNativeSnap(targetHwnd, zone, snapMon);
+                ApplySnap(targetHwnd, zone, snapMon);
             return;
         }
 
-        PostMessageW(targetHwnd, WM_SYSCOMMAND, SC_MOVE | 0x0002, MAKELPARAM(cursorPt.x, cursorPt.y));
-
-        m_liveProbeActive = true;
-        m_liveProbeHwnd = targetHwnd;
+        m_fallbackActive = true;
+        m_fallbackIsClosedApp = false;
+        m_fallbackTargetHwnd = targetHwnd;
+        m_pendingMovePt = cursorPt;
+        m_lastAppliedMovePt = cursorPt;
+        m_hasAppliedMovePt = true;
+        m_lastWindowMoveTick = GetTickCount64();
+        m_movePosted = false;
+        m_moveFlushPending = false;
         if (m_previewHwnd)
-            SetTimer(m_previewHwnd, kTimerLiveProbe, 65, nullptr);
+            SetTimer(m_previewHwnd, kTimerDragWatchdog, 120, nullptr);
+        UpdatePreviewForPoint(cursorPt);
+
+        ShellDiagLog(L"Snap", L"LiveMove started hwnd=0x%p size=%dx%d", targetHwnd, winW, winH);
     }
 
     void WindowSnapCtrl::BeginClosedAppDrag(SlotKind kind, std::wstring label, std::wstring pathOrUrl, POINT cursorPt)
@@ -270,6 +338,9 @@ namespace winrings
         m_fallbackKind = kind;
         m_fallbackLabel = std::move(label);
         m_fallbackPathOrUrl = std::move(pathOrUrl);
+        m_pendingMovePt = cursorPt;
+        if (m_previewHwnd)
+            SetTimer(m_previewHwnd, kTimerDragWatchdog, 120, nullptr);
         UpdatePreviewForPoint(cursorPt);
     }
 
@@ -309,7 +380,7 @@ namespace winrings
         m_previewZone = zone;
         m_previewMon = mon;
 
-        std::wstring badge = ZoneActionText(zone, m_fallbackIsClosedApp);
+        std::wstring badge = ZoneActionText(zone, m_fallbackIsClosedApp, m_useSnapAssist);
         if (m_fallbackIsClosedApp && !m_fallbackLabel.empty())
             badge = m_fallbackLabel + L"  •  " + badge;
 
@@ -454,11 +525,79 @@ namespace winrings
             ShowWindow(m_previewHwnd, SW_HIDE);
     }
 
+    void WindowSnapCtrl::MoveWindowToCursor(HWND target, POINT screenPt) noexcept
+    {
+        if (!target || !IsWindow(target))
+            return;
+
+        const int newX = screenPt.x - m_dragGrabOffsetX;
+        int newY = screenPt.y - m_dragGrabOffsetY;
+        HMONITOR mon = MonitorFromPoint(screenPt, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{ sizeof(mi) };
+        if (GetMonitorInfoW(mon, &mi))
+        {
+            newY = (std::clamp)(newY, static_cast<int>(mi.rcWork.top),
+                (std::max)(static_cast<int>(mi.rcWork.top), static_cast<int>(mi.rcWork.bottom) - 48));
+        }
+
+        SetWindowPos(target, nullptr, newX, newY, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+    }
+
+    void WindowSnapCtrl::ProcessLiveDragMove(POINT screenPt)
+    {
+        if (!m_fallbackActive)
+            return;
+
+        if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0)
+        {
+            OnFallbackDragRelease(screenPt);
+            return;
+        }
+
+        if (!m_fallbackIsClosedApp && m_fallbackTargetHwnd && IsWindow(m_fallbackTargetHwnd))
+        {
+            const ULONGLONG now = GetTickCount64();
+            const ULONGLONG elapsed = now - m_lastWindowMoveTick;
+            if (elapsed >= kLiveMoveThrottleMs)
+            {
+                if (!m_hasAppliedMovePt ||
+                    screenPt.x != m_lastAppliedMovePt.x ||
+                    screenPt.y != m_lastAppliedMovePt.y)
+                {
+                    MoveWindowToCursor(m_fallbackTargetHwnd, screenPt);
+                    m_lastAppliedMovePt = screenPt;
+                    m_hasAppliedMovePt = true;
+                    m_lastWindowMoveTick = now;
+                }
+                if (m_moveFlushPending && m_previewHwnd)
+                {
+                    KillTimer(m_previewHwnd, kTimerMoveFlush);
+                    m_moveFlushPending = false;
+                }
+            }
+            else if (!m_moveFlushPending && m_previewHwnd)
+            {
+                m_moveFlushPending = true;
+                const UINT waitMs = static_cast<UINT>((std::max)(1ULL, kLiveMoveThrottleMs - elapsed));
+                SetTimer(m_previewHwnd, kTimerMoveFlush, waitMs, nullptr);
+            }
+        }
+
+        UpdatePreviewForPoint(screenPt);
+    }
+
     void WindowSnapCtrl::OnFallbackDragMove(POINT screenPt)
     {
         if (!m_fallbackActive)
             return;
-        UpdatePreviewForPoint(screenPt);
+
+        m_pendingMovePt = screenPt;
+        if (!m_movePosted && m_previewHwnd)
+        {
+            m_movePosted = true;
+            PostMessageW(m_previewHwnd, kMsgLiveDragMove, 0, 0);
+        }
     }
 
     bool WindowSnapCtrl::OnFallbackDragRelease(POINT screenPt)
@@ -466,41 +605,69 @@ namespace winrings
         if (!m_fallbackActive)
             return false;
 
-        const bool closedMode = m_fallbackIsClosedApp;
-        HWND targetHwnd = m_fallbackTargetHwnd;
-        const SlotKind kind = m_fallbackKind;
-        const std::wstring label = m_fallbackLabel;
-        const std::wstring pathOrUrl = m_fallbackPathOrUrl;
+        PendingRelease rel;
+        rel.active = true;
+        rel.closedMode = m_fallbackIsClosedApp;
+        rel.targetHwnd = m_fallbackTargetHwnd;
+        rel.kind = m_fallbackKind;
+        rel.label = m_fallbackLabel;
+        rel.pathOrUrl = m_fallbackPathOrUrl;
+        rel.screenPt = screenPt;
+
+        CancelActiveDrag();
+        m_pendingRelease = std::move(rel);
+
+        if (m_previewHwnd)
+            PostMessageW(m_previewHwnd, kMsgLiveDragRelease, 0, 0);
+        else
+            CompletePendingRelease();
+
+        return true;
+    }
+
+    void WindowSnapCtrl::CompletePendingRelease()
+    {
+        if (!m_pendingRelease.active)
+            return;
+
+        PendingRelease rel = std::move(m_pendingRelease);
+        m_pendingRelease = {};
 
         HMONITOR mon = nullptr;
         double dpi = 1.0;
-        const SnapZone zone = HitTestSnapZone(screenPt, mon, dpi);
-
-        CancelActiveDrag();
+        const SnapZone zone = HitTestSnapZone(rel.screenPt, mon, dpi);
+        (void)dpi;
 
         if (zone == SnapZone::None)
-            return true;
-
-        if (!closedMode)
         {
-            if (targetHwnd && IsWindow(targetHwnd))
-                ApplyNativeSnap(targetHwnd, zone, mon);
-            return true;
+            if (!rel.closedMode && rel.targetHwnd && IsWindow(rel.targetHwnd))
+            {
+                MoveWindowToCursor(rel.targetHwnd, rel.screenPt);
+                BringWindowForeground(rel.targetHwnd);
+            }
+            return;
+        }
+
+        if (!rel.closedMode)
+        {
+            if (rel.targetHwnd && IsWindow(rel.targetHwnd))
+                ApplySnap(rel.targetHwnd, zone, mon);
+            return;
         }
 
         // Launch closed slot and arm event-driven snap on first new window
         ClearPendingLaunch();
         m_pendingLaunch.active = true;
-        m_pendingLaunch.kind = kind;
-        m_pendingLaunch.expectedAppKey = WindowTracker::NormalizeAppKey(pathOrUrl, label);
-        m_pendingLaunch.matchExactExeKey = (kind == SlotKind::App) && EndsWithExeCaseInsensitive(pathOrUrl);
+        m_pendingLaunch.kind = rel.kind;
+        m_pendingLaunch.expectedAppKey = WindowTracker::NormalizeAppKey(rel.pathOrUrl, rel.label);
+        m_pendingLaunch.matchExactExeKey = (rel.kind == SlotKind::App) && EndsWithExeCaseInsensitive(rel.pathOrUrl);
         m_pendingLaunch.zone = zone;
         m_pendingLaunch.targetMon = mon;
         m_pendingLaunch.startTick = GetTickCount64();
         m_pendingLaunch.deadlineTick = m_pendingLaunch.startTick + 6000;
         EnumWindows(EnumVisibleSnapshotProc, reinterpret_cast<LPARAM>(&m_pendingLaunch.preExistingHwnds));
 
-        const std::wstring launchTarget = (kind == SlotKind::RecycleBin) ? L"shell:RecycleBinFolder" : pathOrUrl;
+        const std::wstring launchTarget = (rel.kind == SlotKind::RecycleBin) ? L"shell:RecycleBinFolder" : rel.pathOrUrl;
         if (!launchTarget.empty())
             SlotModel::LaunchPathOrUrl(launchTarget);
 
@@ -508,24 +675,27 @@ namespace winrings
             SetTimer(m_previewHwnd, kTimerPendingExpire, 6000, nullptr);
 
         ShellDiagLog(L"Snap", L"Pending launch snap: kind=%d label=%s zone=%d",
-            static_cast<int>(kind), label.c_str(), static_cast<int>(zone));
-        return true;
+            static_cast<int>(rel.kind), rel.label.c_str(), static_cast<int>(zone));
     }
 
     void WindowSnapCtrl::CancelActiveDrag()
     {
         if (m_previewHwnd && IsWindow(m_previewHwnd))
-            KillTimer(m_previewHwnd, kTimerLiveProbe);
-
-        m_liveProbeActive = false;
-        m_liveProbeHwnd = nullptr;
-        m_liveProbeLabel.clear();
+        {
+            KillTimer(m_previewHwnd, kTimerMoveFlush);
+            KillTimer(m_previewHwnd, kTimerDragWatchdog);
+        }
 
         m_fallbackActive = false;
         m_fallbackIsClosedApp = false;
         m_fallbackTargetHwnd = nullptr;
         m_fallbackLabel.clear();
         m_fallbackPathOrUrl.clear();
+        m_movePosted = false;
+        m_moveFlushPending = false;
+        m_hasAppliedMovePt = false;
+        m_lastWindowMoveTick = 0;
+        m_pendingRelease = {};
 
         HidePreviewWindow();
     }
@@ -580,7 +750,81 @@ namespace winrings
         if (m_previewHwnd)
             SetTimer(m_previewHwnd, kTimerSettleSnap, 140, nullptr);
         else
-            ApplyNativeSnap(m_settleHwnd, m_settleZone, m_settleMonitor);
+            ApplySnap(m_settleHwnd, m_settleZone, m_settleMonitor);
+    }
+
+    void WindowSnapCtrl::ApplySnap(HWND target, SnapZone zone, HMONITOR targetMon) noexcept
+    {
+        if (m_useSnapAssist)
+            ApplyNativeSnap(target, zone, targetMon);
+        else
+            ApplyDirectSnap(target, zone, targetMon);
+    }
+
+    void WindowSnapCtrl::ApplyDirectSnap(HWND target, SnapZone zone, HMONITOR targetMon) noexcept
+    {
+        if (!target || !IsWindow(target) || zone == SnapZone::None)
+            return;
+
+        if (IsIconic(target) || IsZoomed(target))
+            ShowWindow(target, SW_RESTORE);
+
+        HMONITOR mon = targetMon ? targetMon : MonitorFromWindow(target, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{ sizeof(mi) };
+        if (!mon || !GetMonitorInfoW(mon, &mi))
+            return;
+
+        const HMONITOR prevMon = MonitorFromWindow(target, MONITOR_DEFAULTTONEAREST);
+
+        if (zone == SnapZone::TopMaximize)
+        {
+            if (prevMon != mon)
+            {
+                RECT rc{};
+                if (GetWindowRect(target, &rc))
+                {
+                    const int winW = (std::min)(static_cast<int>(rc.right - rc.left),
+                        static_cast<int>(mi.rcWork.right - mi.rcWork.left));
+                    const int winH = (std::min)(static_cast<int>(rc.bottom - rc.top),
+                        static_cast<int>(mi.rcWork.bottom - mi.rcWork.top));
+                    const int cx = mi.rcWork.left + (static_cast<int>(mi.rcWork.right - mi.rcWork.left) - winW) / 2;
+                    const int cy = mi.rcWork.top + (static_cast<int>(mi.rcWork.bottom - mi.rcWork.top) - winH) / 2;
+                    SetWindowPos(target, HWND_TOP, cx, cy, winW, winH, SWP_SHOWWINDOW);
+                }
+            }
+            ShowWindow(target, SW_MAXIMIZE);
+            BringWindowForeground(target);
+            ShellDiagLog(L"Snap", L"Applied direct Maximize hwnd=0x%p", target);
+            return;
+        }
+
+        int padL = 0, padT = 0, padR = 0, padB = 0;
+        MeasureExtendedFramePads(target, padL, padT, padR, padB);
+        SnapRect sr = ComputeDirectSnapRect(zone,
+            mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom,
+            padL, padT, padR, padB);
+
+        const BOOL moved = SetWindowPos(target, HWND_TOP,
+            sr.left, sr.top, sr.right - sr.left, sr.bottom - sr.top, SWP_SHOWWINDOW);
+        if (!moved)
+        {
+            ApplyNativeSnap(target, zone, targetMon);
+            return;
+        }
+
+        if (prevMon != mon)
+        {
+            MeasureExtendedFramePads(target, padL, padT, padR, padB);
+            sr = ComputeDirectSnapRect(zone,
+                mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom,
+                padL, padT, padR, padB);
+            SetWindowPos(target, HWND_TOP,
+                sr.left, sr.top, sr.right - sr.left, sr.bottom - sr.top, SWP_SHOWWINDOW);
+        }
+
+        BringWindowForeground(target);
+        ShellDiagLog(L"Snap", L"Applied direct snap zone=%d hwnd=0x%p rect=[%d,%d,%d,%d]",
+            static_cast<int>(zone), target, sr.left, sr.top, sr.right, sr.bottom);
     }
 
     void WindowSnapCtrl::ApplyNativeSnap(HWND target, SnapZone zone, HMONITOR targetMon) noexcept
@@ -671,32 +915,36 @@ namespace winrings
         case WM_MOUSEACTIVATE:
             return MA_NOACTIVATE;
 
+        case kMsgLiveDragMove:
+            m_movePosted = false;
+            ProcessLiveDragMove(m_pendingMovePt);
+            return 0;
+
+        case kMsgLiveDragRelease:
+            CompletePendingRelease();
+            return 0;
+
         case WM_TIMER:
-            if (wp == kTimerLiveProbe)
+            if (wp == kTimerMoveFlush)
             {
-                KillTimer(hwnd, kTimerLiveProbe);
-                HWND target = m_liveProbeHwnd;
-                m_liveProbeActive = false;
-                m_liveProbeHwnd = nullptr;
-                if (target && IsWindow(target))
+                KillTimer(hwnd, kTimerMoveFlush);
+                m_moveFlushPending = false;
+                ProcessLiveDragMove(m_pendingMovePt);
+                return 0;
+            }
+            if (wp == kTimerDragWatchdog)
+            {
+                if (!m_fallbackActive)
                 {
-                    GUITHREADINFO gti{ sizeof(gti) };
-                    const DWORD tid = GetWindowThreadProcessId(target, nullptr);
-                    const bool inNativeDrag = (tid != 0 && GetGUIThreadInfo(tid, &gti) && (gti.flags & GUI_INMOVESIZE) != 0);
-                    if (inNativeDrag)
-                    {
-                        ShellDiagLog(L"Snap", L"LiveDrag active hwnd=0x%p", target);
-                    }
-                    else if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0)
-                    {
-                        ShellDiagLog(L"Snap", L"LiveDrag declined -> Fallback edge snap hwnd=0x%p", target);
-                        m_fallbackActive = true;
-                        m_fallbackIsClosedApp = false;
-                        m_fallbackTargetHwnd = target;
-                        POINT cur{};
-                        if (GetCursorPos(&cur))
-                            UpdatePreviewForPoint(cur);
-                    }
+                    KillTimer(hwnd, kTimerDragWatchdog);
+                    return 0;
+                }
+                if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0)
+                {
+                    POINT cur{};
+                    if (!GetCursorPos(&cur))
+                        cur = m_pendingMovePt;
+                    OnFallbackDragRelease(cur);
                 }
                 return 0;
             }
@@ -715,7 +963,7 @@ namespace winrings
                 m_settleZone = SnapZone::None;
                 m_settleMonitor = nullptr;
                 if (target && z != SnapZone::None)
-                    ApplyNativeSnap(target, z, mon);
+                    ApplySnap(target, z, mon);
                 return 0;
             }
             break;

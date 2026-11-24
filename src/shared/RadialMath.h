@@ -691,4 +691,35 @@ namespace winrings
             return SnapZone::TopMaximize;
         return SnapZone::None;
     }
+
+    struct SnapRect
+    {
+        int left = 0;
+        int top = 0;
+        int right = 0;
+        int bottom = 0;
+    };
+
+    inline SnapRect ComputeDirectSnapRect(
+        SnapZone zone,
+        int workLeft, int workTop, int workRight, int workBottom,
+        int padL, int padT, int padR, int padB) noexcept
+    {
+        const int pL = std::clamp(padL, 0, 32);
+        const int pT = std::clamp(padT, 0, 32);
+        const int pR = std::clamp(padR, 0, 32);
+        const int pB = std::clamp(padB, 0, 32);
+        const int midX = workLeft + (workRight - workLeft) / 2;
+        switch (zone)
+        {
+        case SnapZone::Left:
+            return SnapRect{ workLeft - pL, workTop - pT, midX + pR, workBottom + pB };
+        case SnapZone::Right:
+            return SnapRect{ midX - pL, workTop - pT, workRight + pR, workBottom + pB };
+        case SnapZone::TopMaximize:
+            return SnapRect{ workLeft - pL, workTop - pT, workRight + pR, workBottom + pB };
+        default:
+            return SnapRect{ workLeft, workTop, workRight, workBottom };
+        }
+    }
 } // namespace winrings

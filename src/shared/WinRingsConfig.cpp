@@ -857,6 +857,7 @@ namespace winrings
 
         TryGetBool(*obj, "dragToSnapEnabled", cfg.dragToSnapEnabled);
         TryGetBool(*obj, "dragToSnapLaunchClosed", cfg.dragToSnapLaunchClosed);
+        TryGetBool(*obj, "dragToSnapUseSnapAssist", cfg.dragToSnapUseSnapAssist);
         TryGetInt(*obj, "dragToSnapHoldMs", cfg.dragToSnapHoldMs);
         cfg.dragToSnapHoldMs = (std::clamp)(cfg.dragToSnapHoldMs, 0, 1000);
         TryGetInt(*obj, "dragToSnapTearOffDip", cfg.dragToSnapTearOffDip);
@@ -1007,6 +1008,7 @@ namespace winrings
 
         addBool("dragToSnapEnabled", dragToSnapEnabled);
         addBool("dragToSnapLaunchClosed", dragToSnapLaunchClosed);
+        addBool("dragToSnapUseSnapAssist", dragToSnapUseSnapAssist);
         addInt("dragToSnapHoldMs", dragToSnapHoldMs);
         addInt("dragToSnapTearOffDip", dragToSnapTearOffDip);
 

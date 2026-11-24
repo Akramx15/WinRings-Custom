@@ -697,6 +697,7 @@ namespace winrings
                 if (!forPreview)
                 {
                     m_windowSnap.Initialize(m_shellModule);
+                    m_windowSnap.UpdateConfig(m_config);
                     m_fullWorkArea.Initialize(m_shellModule, m_config, [this]() {
                         m_mediaIsland.OnTaskbarVisibilityChanged(m_fullWorkArea.IsTaskbarHidden());
                     });
@@ -896,6 +897,7 @@ namespace winrings
                 m_input.UpdateCachedDpiScale(QueryPrimaryDpiScale());
                 if (!m_previewMode)
                 {
+                    m_windowSnap.UpdateConfig(m_config);
                     m_gestures.UpdateConfig(m_config);
                     m_fullWorkArea.UpdateConfig(m_config);
                     m_mediaIsland.UpdateConfig(m_config);

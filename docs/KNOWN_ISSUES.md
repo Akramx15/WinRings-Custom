@@ -1,6 +1,13 @@
-# WinRings-Custom — Known Issues & Resolutions (`v3.0.2.0`)
+# WinRings-Custom — Known Issues & Resolutions (`v3.0.3.0`)
 
-Record of all issues tracked from Obsidian notes and how they were diagnosed and fixed across `v3.0.1.0` and `v3.0.2.0`.
+Record of all issues tracked from Obsidian notes and live user testing across `v3.0.1.0`, `v3.0.2.0`, and `v3.0.3.0`.
+
+## Fixed in `v3.0.3.0`
+
+| # | Reported Issue | Root Cause | Resolution in `v3.0.3.0` |
+| :-: | :--- | :--- | :--- |
+| **1** | **Dragged window stayed frozen in place until hitting screen edge** | Because `WM_LBUTTONDOWN` originated inside `RingOverlay` (`explorer.exe`), cross-process `PostMessageW(targetHwnd, WM_SYSCOMMAND, SC_MOVE \| 0x0002)` never entered `GUI_INMOVESIZE`, falling back to a ghost preview without moving `m_fallbackTargetHwnd`. | Removed cross-process `SC_MOVE` probing and implemented decoupled ~60Hz `SetWindowPos(..., SWP_NOSIZE \| SWP_NOZORDER \| SWP_NOACTIVATE \| SWP_ASYNCWINDOWPOS)` live window tracking (`kMsgLiveDragMove` + `14 ms` coalesce/flush timer), adding virtually zero CPU/RAM while letting windows glide live under the cursor across edges and free desktop placement. |
+| **2** | **First click after Drag-to-Snap Right/Left felt like clicking thin air ("ضغطتين")** | Two causes combined: (1) `InputEngine::HandleMouse` returned `1` on `WM_LBUTTONUP` (swallowing the mouse-up event synchronously inside `WH_MOUSE_LL`), leaving button state out of sync; (2) `Win + Left/Right` opened Windows 11 Snap Assist (`XamlExplorerHostIslandWindow`), stealing focus so Click #1 only dismissed Snap Assist. | Stopped swallowing `WM_LBUTTONUP` in `InputEngine.cpp` (`ResetTransientState` also queries real `GetAsyncKeyState` button bits) and deferred release handling cleanly via `kMsgLiveDragRelease`; made **Direct Pixel-Perfect Snap** (`ApplyDirectSnap` + `DWMWA_EXTENDED_FRAME_BOUNDS` border compensation + immediate `BringWindowForeground`) the default (`dragToSnapUseSnapAssist = false`), with a Settings checkbox to re-enable `Win + Arrow` Snap Assist if desired. |
 
 ## Fixed in `v3.0.2.0`
 

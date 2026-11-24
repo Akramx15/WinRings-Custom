@@ -546,6 +546,7 @@ static void TestConfigRoundTrip()
     orig.mediaIslandOffsetXPct = 42;
     orig.dragToSnapEnabled = false;
     orig.dragToSnapLaunchClosed = false;
+    orig.dragToSnapUseSnapAssist = true;
     orig.dragToSnapHoldMs = 240;
     orig.dragToSnapTearOffDip = 48;
     orig.theme = RingTheme::DarkWood;
@@ -581,6 +582,7 @@ static void TestConfigRoundTrip()
     CHECK(loaded.mediaIslandOffsetXPct == 42);
     CHECK(loaded.dragToSnapEnabled == false);
     CHECK(loaded.dragToSnapLaunchClosed == false);
+    CHECK(loaded.dragToSnapUseSnapAssist == true);
     CHECK(loaded.dragToSnapHoldMs == 240);
     CHECK(loaded.dragToSnapTearOffDip == 48);
     CHECK(loaded.theme == RingTheme::DarkWood);
@@ -772,12 +774,29 @@ static void TestDragSpringAndReorder()
 
 static void TestSnapEdgeClassification()
 {
+    CHECK(SwitcherConfig::CreateDefault().dragToSnapUseSnapAssist == false);
+
     CHECK(ClassifySnapEdge(10, 400, 0, 0, 1280, 800, 56, 44) == SnapZone::Left);
     CHECK(ClassifySnapEdge(1260, 400, 0, 0, 1280, 800, 56, 44) == SnapZone::Right);
     CHECK(ClassifySnapEdge(640, 12, 0, 0, 1280, 800, 56, 44) == SnapZone::TopMaximize);
     CHECK(ClassifySnapEdge(640, 400, 0, 0, 1280, 800, 56, 44) == SnapZone::None);
     CHECK(ClassifySnapEdge(-10, 400, 0, 0, 1280, 800, 56, 44) == SnapZone::None);
     CHECK(ClassifySnapEdge(-1270, 400, -1280, 0, 0, 800, 56, 44) == SnapZone::Left);
+
+    const SnapRect rLeft = ComputeDirectSnapRect(SnapZone::Left, 0, 0, 1920, 1080, 7, 0, 7, 7);
+    CHECK(rLeft.left == -7 && rLeft.top == 0 && rLeft.right == 967 && rLeft.bottom == 1087);
+
+    const SnapRect rRight = ComputeDirectSnapRect(SnapZone::Right, 0, 0, 1920, 1080, 7, 0, 7, 7);
+    CHECK(rRight.left == 953 && rRight.top == 0 && rRight.right == 1927 && rRight.bottom == 1087);
+
+    const SnapRect rMax = ComputeDirectSnapRect(SnapZone::TopMaximize, 0, 0, 1920, 1080, 0, 0, 0, 0);
+    CHECK(rMax.left == 0 && rMax.top == 0 && rMax.right == 1920 && rMax.bottom == 1080);
+
+    const SnapRect rNegLeft = ComputeDirectSnapRect(SnapZone::Left, -1920, 0, 0, 1080, 7, 0, 7, 7);
+    CHECK(rNegLeft.left == -1927 && rNegLeft.top == 0 && rNegLeft.right == -953 && rNegLeft.bottom == 1087);
+
+    const SnapRect rClamp = ComputeDirectSnapRect(SnapZone::Left, 0, 0, 1920, 1080, -5, 99, 7, 7);
+    CHECK(rClamp.left == 0 && rClamp.top == -32 && rClamp.right == 967 && rClamp.bottom == 1087);
 }
 
 int wmain()

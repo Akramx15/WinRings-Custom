@@ -100,6 +100,7 @@ namespace winrings::tools
             ID_ED_HC_PRESS,
             ID_CHK_DRAG_SNAP,
             ID_CHK_DRAG_SNAP_CLOSED,
+            ID_CHK_DRAG_SNAP_ASSIST,
             ID_ED_DRAG_SNAP_HOLD,
             ID_ED_DRAG_SNAP_TEAROFF,
 
@@ -2170,6 +2171,9 @@ namespace winrings::tools
                 y += 26;
                 m_chkDragSnapClosed = MakeCtrl(1, L"BUTTON", L"Launch && Snap closed pinned apps when dragged to screen edge",
                     BS_AUTOCHECKBOX | WS_TABSTOP, px + 16, y, 500, 22, ID_CHK_DRAG_SNAP_CLOSED);
+                y += 26;
+                m_chkDragSnapAssist = MakeCtrl(1, L"BUTTON", L"Open Windows Snap Assist picker after snapping (Win+Arrow)",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px + 16, y, 500, 22, ID_CHK_DRAG_SNAP_ASSIST);
                 y += 28;
                 MakeCtrl(1, L"STATIC", L"Hold ms:", 0, px + 16, y + 3, 64, 22, 0);
                 m_edDragSnapHold = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 84, y, 56, 24, ID_ED_DRAG_SNAP_HOLD);
@@ -2419,6 +2423,7 @@ namespace winrings::tools
 
                 SendMessageW(m_chkDragSnap, BM_SETCHECK, m_config.dragToSnapEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
                 SendMessageW(m_chkDragSnapClosed, BM_SETCHECK, m_config.dragToSnapLaunchClosed ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkDragSnapAssist, BM_SETCHECK, m_config.dragToSnapUseSnapAssist ? BST_CHECKED : BST_UNCHECKED, 0);
                 SetWindowTextW(m_edDragSnapHold, std::to_wstring(m_config.dragToSnapHoldMs).c_str());
                 SetWindowTextW(m_edDragSnapTearOff, std::to_wstring(m_config.dragToSnapTearOffDip).c_str());
 
@@ -2575,6 +2580,7 @@ namespace winrings::tools
 
                 m_config.dragToSnapEnabled = isChk(m_chkDragSnap);
                 m_config.dragToSnapLaunchClosed = isChk(m_chkDragSnapClosed);
+                m_config.dragToSnapUseSnapAssist = isChk(m_chkDragSnapAssist);
                 m_config.dragToSnapHoldMs = (std::clamp)(ParseIntOr(GetText(m_edDragSnapHold), 150), 0, 1000);
                 m_config.dragToSnapTearOffDip = (std::clamp)(ParseIntOr(GetText(m_edDragSnapTearOff), 36), 12, 160);
 
@@ -3001,7 +3007,7 @@ namespace winrings::tools
             HWND m_chkTpPhysClick{}, m_chkTpCorner{}, m_cbTpCornerPos{}, m_edTpCornerPct{};
             HWND m_chkShake{}, m_edShakeRev{}, m_edShakeWin{}, m_edShakeAmp{}, m_chkShakeFs{};
             HWND m_chkHotCorner{}, m_cbHcPos{}, m_cbHcAct{}, m_edHcPress{};
-            HWND m_chkDragSnap{}, m_chkDragSnapClosed{}, m_edDragSnapHold{}, m_edDragSnapTearOff{};
+            HWND m_chkDragSnap{}, m_chkDragSnapClosed{}, m_chkDragSnapAssist{}, m_edDragSnapHold{}, m_edDragSnapTearOff{};
 
             HWND m_edAccent{}, m_edRadius{}, m_edDeadzone{}, m_edIconSize{}, m_edThumbScale{};
             HWND m_cbWinView{}, m_chkNoAnim{}, m_chkFanOne{}, m_chkPtrFollow{}, m_chkShiftCenter{}, m_chkIncludeUnpinned{};

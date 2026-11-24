@@ -1,4 +1,4 @@
-# WinRings-Custom Features (`v3.0.2.0`)
+# WinRings-Custom Features (`v3.0.3.0`)
 
 `WinRings-Custom` combines **upstream `WinRings v3.0.0`** (`WCA` native acrylic + 3D beveled glass edges, `m_outsideClickPending` click-vs-drag guard, `isRingDragActive` reorder guard, `explorer.exe` folder icon fix, slim core binary) with Akram's unified Windows 11 desktop enhancements:
 
@@ -49,9 +49,9 @@
 ## 5. Radial Ring Customizations & Drag-to-Snap (`RingOverlay` + `WindowSnapCtrl` + `SettingsDialog`)
 
 - **Drag-to-Snap / Split-Screen (`dragToSnapEnabled`):**
-  - Dragging an **outer-arc Window Card** or **unpinned running Ring slot** immediately dismisses the ring, restores & attaches the window under the cursor, and triggers Windows 11 native live drag (`SC_MOVE`, engaging Aero Snap & **Snap Assist**).
-  - Dragging a **pinned Ring slot** inside the ring reorders pins normally; pulling it past `outerRadius + dragToSnapTearOffDip` after `dragToSnapHoldMs` cancels temporary reordering cleanly and snaps the open app—or optionally launches & auto-snaps a closed pinned app/folder/Recycle Bin/website (`dragToSnapLaunchClosed`) via `HSHELL_*` events (zero polling).
-  - If a custom-chrome/elevated window declines cross-process `SC_MOVE`, WinRings automatically switches within `65 ms` to a translucent Fluent edge-snap preview (`Left`, `Right`, `Maximize`) and triggers native `Win + Arrow` on release.
+  - Dragging an **outer-arc Window Card** or **unpinned running Ring slot** immediately dismisses the ring, restores the window cleanly (`WINDOWPLACEMENT` size-aware), and moves it **live with the cursor** at up to ~60Hz via decoupled async `SetWindowPos(..., SWP_ASYNCWINDOWPOS)` (virtually 0% extra CPU/RAM, zero new hooks, zero blocked `WH_MOUSE_LL` callbacks) while rendering a translucent Fluent edge preview (`Left`, `Right`, `Maximize`).
+  - Dragging a **pinned Ring slot** inside the ring reorders pins normally; pulling it past `outerRadius + dragToSnapTearOffDip` after `dragToSnapHoldMs` cancels temporary reordering cleanly and live-drags the open app—or optionally launches & auto-snaps a closed pinned app/folder/Recycle Bin/website (`dragToSnapLaunchClosed`) via `HSHELL_*` events (zero polling).
+  - Releasing on a screen edge commits immediately with `WM_LBUTTONUP` preserved (never swallowed) and deferred snap execution: by default (`dragToSnapUseSnapAssist = false`), **Direct Pixel-Perfect Snap** compensates DWM extended frame borders (`DWMWA_EXTENDED_FRAME_BOUNDS`) via `ComputeDirectSnapRect` and sets immediate foreground focus with **zero stolen clicks**; toggling `dragToSnapUseSnapAssist = true` uses native `Win + Arrow` + Windows 11 Snap Assist. Releasing outside any edge drops the window cleanly at its live position.
 - **Window Card `X` Close Button:** Clicking the `X` close badge on hovered outer-arc window cards closes that window immediately without activating it.
 - **Ring & Card Context Actions:** Right-click slots/windows for **Run as Administrator**, **Close Window**, **End Task** (`TerminateProcessByPid`), **Toggle Top Minimal Bar**, and **Show Media Island**.
 - **Selection Indicator Styles (`selectionIndicator`):** `GlowOnly`, `SectorWedge` (restored classic v1 blue wedge accent), or `PointerLine`.

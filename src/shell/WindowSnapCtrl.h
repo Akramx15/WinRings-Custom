@@ -24,6 +24,7 @@ namespace winrings
 
         bool Initialize(HMODULE shellModule);
         void Shutdown();
+        void UpdateConfig(const SwitcherConfig& cfg) noexcept { m_useSnapAssist = cfg.dragToSnapUseSnapAssist; }
 
         void BeginOpenWindowDrag(HWND targetHwnd, POINT cursorPt);
         void BeginClosedAppDrag(SlotKind kind, std::wstring label, std::wstring pathOrUrl, POINT cursorPt);
@@ -48,6 +49,17 @@ namespace winrings
             std::unordered_set<HWND> preExistingHwnds;
         };
 
+        struct PendingRelease
+        {
+            bool active = false;
+            bool closedMode = false;
+            HWND targetHwnd = nullptr;
+            SlotKind kind = SlotKind::App;
+            std::wstring label;
+            std::wstring pathOrUrl;
+            POINT screenPt{};
+        };
+
         static LRESULT CALLBACK PreviewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) noexcept;
         LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
@@ -56,10 +68,15 @@ namespace winrings
 
         SnapZone HitTestSnapZone(POINT screenPt, HMONITOR& outMon, double& outDpiScale) const noexcept;
         void UpdatePreviewForPoint(POINT screenPt);
+        void ProcessLiveDragMove(POINT screenPt);
+        void MoveWindowToCursor(HWND target, POINT screenPt) noexcept;
+        void CompletePendingRelease();
         void RenderZonePreview(HMONITOR mon, double dpiScale, SnapZone zone, const std::wstring& badgeText);
         void HidePreviewWindow() noexcept;
 
         static void BringWindowForeground(HWND target) noexcept;
+        void ApplySnap(HWND target, SnapZone zone, HMONITOR targetMon) noexcept;
+        void ApplyDirectSnap(HWND target, SnapZone zone, HMONITOR targetMon) noexcept;
         void ApplyNativeSnap(HWND target, SnapZone zone, HMONITOR targetMon) noexcept;
         void ClearPendingLaunch() noexcept;
 
@@ -67,13 +84,9 @@ namespace winrings
         HWND m_previewHwnd = nullptr;
         bool m_classRegistered = false;
         bool m_initialized = false;
+        bool m_useSnapAssist = false;
 
-        // Open-window native live drag probe state
-        bool m_liveProbeActive = false;
-        HWND m_liveProbeHwnd = nullptr;
-        std::wstring m_liveProbeLabel;
-
-        // Edge-snap ghost preview state (for Fallback open-window drag or Closed-app launch drag)
+        // Live drag + edge-snap ghost preview state
         bool m_fallbackActive = false;
         bool m_fallbackIsClosedApp = false;
         HWND m_fallbackTargetHwnd = nullptr;
@@ -82,6 +95,18 @@ namespace winrings
         std::wstring m_fallbackPathOrUrl;
         SnapZone m_previewZone = SnapZone::None;
         HMONITOR m_previewMon = nullptr;
+
+        int m_dragGrabOffsetX = 0;
+        int m_dragGrabOffsetY = 0;
+        int m_dragWinW = 0;
+        int m_dragWinH = 0;
+        POINT m_pendingMovePt{};
+        POINT m_lastAppliedMovePt{};
+        bool m_hasAppliedMovePt = false;
+        ULONGLONG m_lastWindowMoveTick = 0;
+        bool m_movePosted = false;
+        bool m_moveFlushPending = false;
+        PendingRelease m_pendingRelease;
 
         // Pending post-launch snap state
         PendingLaunchSnap m_pendingLaunch;

@@ -6,7 +6,7 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
 
 ## 1. Repository Identity & Upstream Lineage
 
-- **Fork (`origin`):** `https://github.com/Akramx15/WinRings-Custom` (`main` branch, currently **`v3.0.2.0`**)
+- **Fork (`origin`):** `https://github.com/Akramx15/WinRings-Custom` (`main` branch, currently **`v3.0.3.0`**)
 - **Upstream (`upstream`):** `https://github.com/AhmadotEng/WinRings` (synced from release tag **`v3.0.0`**, commit `df4012a`)
 - **Pre-Upgrade Backup Branch:** `v2.0.1-custom-backup` (`8cf2b11`) — historical reference for the v2 custom fork before the v3 upgrade.
 
@@ -49,7 +49,7 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
    - Raw Input touchpad physical left-click, corner-tap, and 2-finger Media Island volume scroll (`ELAN06FA` HID parsing + periodic `GetRegisteredRawInputDevices` auto-recovery)
    - Ultra-lightweight 2D vector mouse shake trigger in `InputEngine` (`WH_MOUSE_LL` fixed circular array, cached DPI scale, async trigger)
    - GNOME-style hot-corner velocity/pressure flick
-   - Drag-to-Snap / Split-Screen (`WindowSnapCtrl`) from Ring icons (`Tear-off` for pinned, immediate drag for unpinned) and Window Cards (`SC_MOVE` live native Windows 11 Snap Layouts + fallback ghost preview / `Win+Arrow`, plus optional closed pinned app launch & event-driven snap)
+   - Drag-to-Snap / Split-Screen (`WindowSnapCtrl`) from Ring icons (`Tear-off` for pinned, immediate drag for unpinned) and Window Cards: lightweight decoupled ~60Hz `SWP_ASYNCWINDOWPOS` live window tracking + Fluent edge ghost preview, deferred zero-swallowed `WM_LBUTTONUP` release, DWM border-compensated **Direct Snap** (`ApplyDirectSnap`, default `dragToSnapUseSnapAssist = false` for immediate foreground focus without Snap Assist click theft) or optional `Win+Arrow` Snap Assist (`dragToSnapUseSnapAssist = true`), plus optional closed pinned app launch & event-driven snap.
    - Ring window card `X` close button, right-click `Run as Administrator` & `End Task`, `Toggle Top Minimal Bar` & `Show Media Island` toggles, `SelectionIndicatorStyle` (`GlowOnly`, `SectorWedge`, `PointerLine`), and `disableRingBlur` performance mode.
 
 ---

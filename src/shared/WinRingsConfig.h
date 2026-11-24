@@ -202,6 +202,7 @@ namespace winrings
         // Drag-to-Snap / Split-Screen (from Ring & Window Cards)
         bool dragToSnapEnabled = true;
         bool dragToSnapLaunchClosed = true;
+        bool dragToSnapUseSnapAssist = false;
         int dragToSnapHoldMs = 150;
         int dragToSnapTearOffDip = 36;
 
