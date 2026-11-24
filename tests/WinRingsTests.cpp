@@ -544,6 +544,10 @@ static void TestConfigRoundTrip()
     orig.mediaIslandMarquee = false;
     orig.mediaIslandFullscreenMode = MediaIslandFullscreenMode::GamesOnly;
     orig.mediaIslandOffsetXPct = 42;
+    orig.dragToSnapEnabled = false;
+    orig.dragToSnapLaunchClosed = false;
+    orig.dragToSnapHoldMs = 240;
+    orig.dragToSnapTearOffDip = 48;
     orig.theme = RingTheme::DarkWood;
     orig.glassLevel = 86;
     orig.lightDarkMode = 15;
@@ -575,6 +579,10 @@ static void TestConfigRoundTrip()
     CHECK(loaded.mediaIslandMarquee == false);
     CHECK(loaded.mediaIslandFullscreenMode == MediaIslandFullscreenMode::GamesOnly);
     CHECK(loaded.mediaIslandOffsetXPct == 42);
+    CHECK(loaded.dragToSnapEnabled == false);
+    CHECK(loaded.dragToSnapLaunchClosed == false);
+    CHECK(loaded.dragToSnapHoldMs == 240);
+    CHECK(loaded.dragToSnapTearOffDip == 48);
     CHECK(loaded.theme == RingTheme::DarkWood);
     CHECK(loaded.glassLevel == 86);
     CHECK(loaded.lightDarkMode == 15);
@@ -762,6 +770,16 @@ static void TestDragSpringAndReorder()
     CHECK((v3 == std::vector<int>{ 10, 20, 30, 40, 50 }));
 }
 
+static void TestSnapEdgeClassification()
+{
+    CHECK(ClassifySnapEdge(10, 400, 0, 0, 1280, 800, 56, 44) == SnapZone::Left);
+    CHECK(ClassifySnapEdge(1260, 400, 0, 0, 1280, 800, 56, 44) == SnapZone::Right);
+    CHECK(ClassifySnapEdge(640, 12, 0, 0, 1280, 800, 56, 44) == SnapZone::TopMaximize);
+    CHECK(ClassifySnapEdge(640, 400, 0, 0, 1280, 800, 56, 44) == SnapZone::None);
+    CHECK(ClassifySnapEdge(-10, 400, 0, 0, 1280, 800, 56, 44) == SnapZone::None);
+    CHECK(ClassifySnapEdge(-1270, 400, -1280, 0, 0, 800, 56, 44) == SnapZone::Left);
+}
+
 int wmain()
 {
     TestRadialMath();
@@ -773,6 +791,7 @@ int wmain()
     TestThemeMaterialEngine();
     TestSlotMatchingAndPreviews();
     TestDragSpringAndReorder();
+    TestSnapEdgeClassification();
 
     if (g_failures == 0)
     {

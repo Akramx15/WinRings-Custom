@@ -27,6 +27,8 @@ namespace winrings
     {
         constexpr wchar_t kIslandClass[] = L"WinRings.MediaIsland.v1";
         constexpr UINT kMsgMediaUpdated = WM_APP + 501;
+        constexpr UINT kMsgExternalWheel = WM_APP + 502;
+        constexpr UINT kMsgTouchpadWheel = WM_APP + 503;
 
         constexpr UINT_PTR kTimerExpand = 1;
         constexpr UINT_PTR kTimerVolumeHide = 2;
@@ -300,6 +302,10 @@ namespace winrings
         m_marqueeLastTitle.clear();
         m_wheelAccum = 0;
         m_wheelLastTick = 0;
+        m_lastRealWheelTick = 0;
+        m_lastWheelLogTick = 0;
+        m_cachedBarTopPx = 0;
+        m_cachedBarBottomPx = 0;
         m_draggingPos = false;
         m_fullscreenTimerRunning = false;
         m_lastFullscreenHide = false;
@@ -340,13 +346,26 @@ namespace winrings
         RECT rc{};
         if (!GetWindowRect(m_hwnd, &rc))
             return false;
-        return PtInRect(&rc, screenPt) != FALSE;
+        const LONG hitTop = (m_cachedBarBottomPx > m_cachedBarTopPx)
+            ? (std::min)(rc.top, m_cachedBarTopPx)
+            : (std::max)(0L, rc.top - 4);
+        const LONG hitBottom = (m_cachedBarBottomPx > m_cachedBarTopPx)
+            ? (std::max)(rc.bottom, m_cachedBarBottomPx)
+            : rc.bottom;
+        return screenPt.x >= rc.left && screenPt.x <= rc.right &&
+            screenPt.y >= hitTop && screenPt.y <= hitBottom;
     }
 
     void MediaIsland::PostExternalWheel(short wheelDelta) noexcept
     {
         if (m_hwnd && IsWindow(m_hwnd))
-            PostMessageW(m_hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(wheelDelta)), 0);
+            PostMessageW(m_hwnd, kMsgExternalWheel, MAKEWPARAM(0, static_cast<WORD>(wheelDelta)), 0);
+    }
+
+    void MediaIsland::PostTouchpadWheel(short wheelDelta) noexcept
+    {
+        if (m_hwnd && IsWindow(m_hwnd))
+            PostMessageW(m_hwnd, kMsgTouchpadWheel, MAKEWPARAM(0, static_cast<WORD>(wheelDelta)), 0);
     }
 
     bool MediaIsland::CreateRenderFactories()
@@ -846,6 +865,8 @@ namespace winrings
         int widthPx = static_cast<int>(std::ceil(pillW * m_dpiScale));
         const int heightPx = static_cast<int>(std::ceil(pillH * m_dpiScale));
         const int barPx = static_cast<int>(std::round(barDip * m_dpiScale));
+        m_cachedBarTopPx = monTop;
+        m_cachedBarBottomPx = monTop + barPx;
 
         int dstX = monLeft + (monW - widthPx) / 2;
         const int maxRightX = (std::max)(monLeft + 4, monRight - widthPx - 4);
@@ -1328,12 +1349,22 @@ namespace winrings
             SetEvent(m_wakeEvent);
     }
 
-    void MediaIsland::AdjustMasterVolume(int wheelDelta)
+    void MediaIsland::AdjustMasterVolume(int wheelDelta, const wchar_t* source, bool fromTouchpadHid)
     {
         if (!m_config.mediaIslandScrollVolume || wheelDelta == 0)
             return;
 
         const ULONGLONG now = GetTickCount64();
+        if (fromTouchpadHid)
+        {
+            if ((now - m_lastRealWheelTick) < 80)
+                return;
+        }
+        else
+        {
+            m_lastRealWheelTick = now;
+        }
+
         if ((now - m_wheelLastTick) > 600 ||
             (m_wheelAccum > 0 && wheelDelta < 0) ||
             (m_wheelAccum < 0 && wheelDelta > 0))
@@ -1343,9 +1374,9 @@ namespace winrings
         m_wheelLastTick = now;
         m_wheelAccum += wheelDelta;
 
-        constexpr int kWheelStepThreshold = 60;
+        constexpr int kWheelStepThreshold = 30;
         int steps = 0;
-        while (std::abs(m_wheelAccum) >= kWheelStepThreshold && std::abs(steps) < 5)
+        while (std::abs(m_wheelAccum) >= kWheelStepThreshold && std::abs(steps) < 8)
         {
             if (m_wheelAccum > 0)
             {
@@ -1362,6 +1393,7 @@ namespace winrings
             return;
 
         const HRESULT hrCom = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        HRESULT lastHr = S_OK;
         bool applied = false;
         int appliedPct = m_lastVolumePct;
         {
@@ -1369,15 +1401,20 @@ namespace winrings
             Microsoft::WRL::ComPtr<IMMDevice> device;
             Microsoft::WRL::ComPtr<IAudioEndpointVolume> epVol;
             float current = 0.0f;
-            if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_INPROC_SERVER,
-                IID_PPV_ARGS(enumerator.GetAddressOf()))) && enumerator &&
-                SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, device.GetAddressOf())) && device &&
-                SUCCEEDED(device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, nullptr,
-                    reinterpret_cast<void**>(epVol.GetAddressOf()))) && epVol &&
-                SUCCEEDED(epVol->GetMasterVolumeLevelScalar(&current)))
+            lastHr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_INPROC_SERVER,
+                IID_PPV_ARGS(enumerator.GetAddressOf()));
+            if (SUCCEEDED(lastHr) && enumerator)
+                lastHr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, device.GetAddressOf());
+            if (SUCCEEDED(lastHr) && device)
+                lastHr = device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, nullptr,
+                    reinterpret_cast<void**>(epVol.GetAddressOf()));
+            if (SUCCEEDED(lastHr) && epVol)
+                lastHr = epVol->GetMasterVolumeLevelScalar(&current);
+            if (SUCCEEDED(lastHr) && epVol)
             {
-                const float next = (std::clamp)(current + static_cast<float>(steps) * 0.02f, 0.0f, 1.0f);
-                if (SUCCEEDED(epVol->SetMasterVolumeLevelScalar(next, nullptr)))
+                const float next = (std::clamp)(current + static_cast<float>(steps) * 0.01f, 0.0f, 1.0f);
+                lastHr = epVol->SetMasterVolumeLevelScalar(next, nullptr);
+                if (SUCCEEDED(lastHr))
                 {
                     appliedPct = static_cast<int>(std::lround(next * 100.0f));
                     applied = true;
@@ -1389,11 +1426,22 @@ namespace winrings
 
         if (applied)
         {
+            if ((now - m_lastWheelLogTick) > 1500)
+            {
+                m_lastWheelLogTick = now;
+                ShellDiagLog(L"MediaIsland", L"Volume via %s delta=%d -> %d%%",
+                    source ? source : L"?", wheelDelta, appliedPct);
+            }
             m_lastVolumePct = appliedPct;
             m_showVolumeOverlay = true;
             if (m_hwnd)
                 SetTimer(m_hwnd, kTimerVolumeHide, 1200, nullptr);
             UpdateWindowBoundsAndRender();
+        }
+        else
+        {
+            ShellDiagLog(L"MediaIsland", L"AdjustMasterVolume failed src=%s hr=0x%08X",
+                source ? source : L"?", static_cast<unsigned>(lastHr));
         }
     }
 
@@ -1421,6 +1469,9 @@ namespace winrings
         {
         case WM_MOUSEACTIVATE:
             return MA_NOACTIVATE;
+
+        case WM_NCHITTEST:
+            return HTCLIENT;
 
         case kMsgMediaUpdated:
             UpdateWindowBoundsAndRender();
@@ -1544,7 +1595,28 @@ namespace winrings
         case WM_MOUSEWHEEL:
         {
             const short delta = GET_WHEEL_DELTA_WPARAM(wp);
-            AdjustMasterVolume(delta);
+            AdjustMasterVolume(delta, L"MouseWheel", false);
+            return 0;
+        }
+
+        case WM_POINTERWHEEL:
+        {
+            const short delta = GET_WHEEL_DELTA_WPARAM(wp);
+            AdjustMasterVolume(delta, L"PointerWheel", false);
+            return 0;
+        }
+
+        case kMsgExternalWheel:
+        {
+            const short delta = GET_WHEEL_DELTA_WPARAM(wp);
+            AdjustMasterVolume(delta, L"HookWheel", false);
+            return 0;
+        }
+
+        case kMsgTouchpadWheel:
+        {
+            const short delta = GET_WHEEL_DELTA_WPARAM(wp);
+            AdjustMasterVolume(delta, L"TouchpadHid", true);
             return 0;
         }
 

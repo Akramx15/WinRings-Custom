@@ -98,6 +98,10 @@ namespace winrings::tools
             ID_CB_HC_POS,
             ID_CB_HC_ACT,
             ID_ED_HC_PRESS,
+            ID_CHK_DRAG_SNAP,
+            ID_CHK_DRAG_SNAP_CLOSED,
+            ID_ED_DRAG_SNAP_HOLD,
+            ID_ED_DRAG_SNAP_TEAROFF,
 
             // Page 2: Top Bar & Media Island
             ID_CHK_TOPBAR_ON = 400,
@@ -2157,6 +2161,20 @@ namespace winrings::tools
                 SendMessageW(m_cbHcAct, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Open WinRings"));
                 MakeCtrl(1, L"STATIC", L"Press:", 0, px + 530, y + 3, 48, 22, 0);
                 m_edHcPress = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 582, y, 58, 24, ID_ED_HC_PRESS);
+                y += 42;
+
+                MakeCtrl(1, L"STATIC", L"Drag-to-Snap / Split-Screen (from Ring & Window Cards):", 0, px, y, 480, 22, 0);
+                y += 26;
+                m_chkDragSnap = MakeCtrl(1, L"BUTTON", L"Enable Drag-to-Snap from Ring & Window Cards",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px + 16, y, 440, 22, ID_CHK_DRAG_SNAP);
+                y += 26;
+                m_chkDragSnapClosed = MakeCtrl(1, L"BUTTON", L"Launch && Snap closed pinned apps when dragged to screen edge",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, px + 16, y, 500, 22, ID_CHK_DRAG_SNAP_CLOSED);
+                y += 28;
+                MakeCtrl(1, L"STATIC", L"Hold ms:", 0, px + 16, y + 3, 64, 22, 0);
+                m_edDragSnapHold = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 84, y, 56, 24, ID_ED_DRAG_SNAP_HOLD);
+                MakeCtrl(1, L"STATIC", L"Tear-off DIP (outside ring):", 0, px + 162, y + 3, 184, 22, 0);
+                m_edDragSnapTearOff = MakeCtrl(1, L"EDIT", L"", WS_BORDER | WS_TABSTOP, px + 350, y, 56, 24, ID_ED_DRAG_SNAP_TEAROFF);
 
                 // Page 2: Top Bar & Media Island
                 y = 84;
@@ -2399,6 +2417,11 @@ namespace winrings::tools
                 SendMessageW(m_cbHcAct, CB_SETCURSEL, static_cast<WPARAM>(static_cast<int>(m_config.hotCornerAction)), 0);
                 SetWindowTextW(m_edHcPress, std::to_wstring(m_config.hotCornerPressureThreshold).c_str());
 
+                SendMessageW(m_chkDragSnap, BM_SETCHECK, m_config.dragToSnapEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(m_chkDragSnapClosed, BM_SETCHECK, m_config.dragToSnapLaunchClosed ? BST_CHECKED : BST_UNCHECKED, 0);
+                SetWindowTextW(m_edDragSnapHold, std::to_wstring(m_config.dragToSnapHoldMs).c_str());
+                SetWindowTextW(m_edDragSnapTearOff, std::to_wstring(m_config.dragToSnapTearOffDip).c_str());
+
                 SetWindowTextW(m_edAccent, m_config.accentColor.c_str());
                 wchar_t num[32]{};
                 swprintf_s(num, L"%.0f", m_config.ringRadiusDip);
@@ -2549,6 +2572,11 @@ namespace winrings::tools
                 m_config.hotCornerPos = static_cast<HotCornerPos>(cbIdx(m_cbHcPos, 1));
                 m_config.hotCornerAction = static_cast<HotCornerAction>(cbIdx(m_cbHcAct, 1));
                 m_config.hotCornerPressureThreshold = (std::clamp)(ParseIntOr(GetText(m_edHcPress), 140), 50, 400);
+
+                m_config.dragToSnapEnabled = isChk(m_chkDragSnap);
+                m_config.dragToSnapLaunchClosed = isChk(m_chkDragSnapClosed);
+                m_config.dragToSnapHoldMs = (std::clamp)(ParseIntOr(GetText(m_edDragSnapHold), 150), 0, 1000);
+                m_config.dragToSnapTearOffDip = (std::clamp)(ParseIntOr(GetText(m_edDragSnapTearOff), 36), 12, 160);
 
                 m_config.glassLevel = (std::clamp)(m_config.glassLevel, 0, 100);
                 m_config.lightDarkMode = (std::clamp)(m_config.lightDarkMode, 0, 100);
@@ -2973,6 +3001,7 @@ namespace winrings::tools
             HWND m_chkTpPhysClick{}, m_chkTpCorner{}, m_cbTpCornerPos{}, m_edTpCornerPct{};
             HWND m_chkShake{}, m_edShakeRev{}, m_edShakeWin{}, m_edShakeAmp{}, m_chkShakeFs{};
             HWND m_chkHotCorner{}, m_cbHcPos{}, m_cbHcAct{}, m_edHcPress{};
+            HWND m_chkDragSnap{}, m_chkDragSnapClosed{}, m_edDragSnapHold{}, m_edDragSnapTearOff{};
 
             HWND m_edAccent{}, m_edRadius{}, m_edDeadzone{}, m_edIconSize{}, m_edThumbScale{};
             HWND m_cbWinView{}, m_chkNoAnim{}, m_chkFanOne{}, m_chkPtrFollow{}, m_chkShiftCenter{}, m_chkIncludeUnpinned{};

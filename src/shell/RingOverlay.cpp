@@ -910,6 +910,7 @@ namespace winrings
         m_pressSlotIndex = -1;
         m_pressSubIndex = -1;
         m_pressScreenPt = {};
+        m_pressStartTick = 0;
         m_reorderActive = false;
         m_reorderFromIndex = -1;
         m_reorderCurrentIndex = -1;
@@ -978,6 +979,7 @@ namespace winrings
         m_pressKind = PressKind::None;
         m_pressSlotIndex = -1;
         m_pressSubIndex = -1;
+        m_pressStartTick = 0;
         m_reorderActive = false;
         m_reorderFromIndex = -1;
         m_reorderCurrentIndex = -1;
@@ -2930,6 +2932,7 @@ namespace winrings
         m_pressKind = PressKind::None;
         m_pressSlotIndex = -1;
         m_pressSubIndex = -1;
+        m_pressStartTick = 0;
         m_reorderActive = false;
         m_reorderFromIndex = -1;
         m_reorderCurrentIndex = -1;
@@ -3174,6 +3177,7 @@ namespace winrings
                 if (movedPx >= 5.0 * m_dpiScale)
                 {
                     std::wstring dragPath;
+                    HWND snapWindowHwnd = nullptr;
                     if (m_expandedSlotIndex >= 0 && m_pressSubIndex >= 0 &&
                         m_pressSubIndex < static_cast<int>(m_submenuCards.size()))
                     {
@@ -3184,15 +3188,19 @@ namespace winrings
                         {
                             dragPath = card.subSlot->pathOrUrl;
                         }
+                        else if (card.window && card.window->hwnd && IsWindow(card.window->hwnd))
+                        {
+                            snapWindowHwnd = card.window->hwnd;
+                        }
                     }
-
-                    m_pressKind = PressKind::None;
-                    m_pressSubIndex = -1;
-                    if (GetCapture() == m_hwnd)
-                        ReleaseCapture();
 
                     if (!dragPath.empty())
                     {
+                        m_pressKind = PressKind::None;
+                        m_pressSubIndex = -1;
+                        m_pressStartTick = 0;
+                        if (GetCapture() == m_hwnd)
+                            ReleaseCapture();
                         ClearSubmenu();
                         m_selectedIndex = -1;
                         Render();
@@ -3202,6 +3210,30 @@ namespace winrings
                         if (m_isOpen)
                             Dismiss();
                     }
+                    else if (snapWindowHwnd && m_config.dragToSnapEnabled)
+                    {
+                        const ULONGLONG heldMs = GetTickCount64() - m_pressStartTick;
+                        if (movedPx >= 10.0 * m_dpiScale &&
+                            (heldMs >= static_cast<ULONGLONG>(m_config.dragToSnapHoldMs) || movedPx >= 24.0 * m_dpiScale))
+                        {
+                            m_pressKind = PressKind::None;
+                            m_pressSubIndex = -1;
+                            m_pressStartTick = 0;
+                            if (GetCapture() == m_hwnd)
+                                ReleaseCapture();
+                            Dismiss();
+                            if (m_callbacks.onStartOpenWindowSnapDrag)
+                                m_callbacks.onStartOpenWindowSnapDrag(snapWindowHwnd, screenPt);
+                        }
+                    }
+                    else
+                    {
+                        m_pressKind = PressKind::None;
+                        m_pressSubIndex = -1;
+                        m_pressStartTick = 0;
+                        if (GetCapture() == m_hwnd)
+                            ReleaseCapture();
+                    }
                 }
                 return 0;
             }
@@ -3209,11 +3241,82 @@ namespace winrings
             if (m_pressKind == PressKind::RingSlot)
             {
                 const int pinnedCount = PinnedVisibleSlotCount();
+                const double movedPx = std::hypot(
+                    static_cast<double>(screenPt.x - m_pressScreenPt.x),
+                    static_cast<double>(screenPt.y - m_pressScreenPt.y));
+                const ULONGLONG heldMs = GetTickCount64() - m_pressStartTick;
+                const RingGeometry geom = ActiveGeometry();
+                const double distDip = std::hypot(localDip.x - kCenterDip, localDip.y - kCenterDip);
+
+                // Unpinned running slots are not reorderable: start Drag-to-Snap directly.
+                if (m_config.dragToSnapEnabled && m_pressSlotIndex >= pinnedCount &&
+                    m_pressSlotIndex < static_cast<int>(m_visibleSlots.size()))
+                {
+                    if (movedPx >= 10.0 * m_dpiScale &&
+                        (heldMs >= static_cast<ULONGLONG>(m_config.dragToSnapHoldMs) || movedPx >= 24.0 * m_dpiScale))
+                    {
+                        HWND targetHwnd = nullptr;
+                        const auto& slot = m_visibleSlots[static_cast<size_t>(m_pressSlotIndex)];
+                        if (!slot.windows.empty() && IsWindow(slot.windows[0].hwnd))
+                            targetHwnd = slot.windows[0].hwnd;
+                        m_pressKind = PressKind::None;
+                        m_pressSlotIndex = -1;
+                        m_pressStartTick = 0;
+                        if (GetCapture() == m_hwnd)
+                            ReleaseCapture();
+                        if (targetHwnd)
+                        {
+                            Dismiss();
+                            if (m_callbacks.onStartOpenWindowSnapDrag)
+                                m_callbacks.onStartOpenWindowSnapDrag(targetHwnd, screenPt);
+                        }
+                    }
+                    return 0;
+                }
+
+                // Pinned slots: reorder inside ring; tear-off outside outerRadius + threshold transitions to Drag-to-Snap.
+                const double tearOffRadiusDip = geom.outerRadius + static_cast<double>(m_config.dragToSnapTearOffDip);
+                if (m_config.dragToSnapEnabled &&
+                    m_pressSlotIndex >= 0 && m_pressSlotIndex < pinnedCount &&
+                    m_filterQuery.empty() && !m_searchArcActive &&
+                    movedPx >= 10.0 * m_dpiScale &&
+                    distDip >= tearOffRadiusDip &&
+                    heldMs >= static_cast<ULONGLONG>(m_config.dragToSnapHoldMs))
+                {
+                    const int activeIdx = m_reorderActive ? m_reorderCurrentIndex : m_pressSlotIndex;
+                    if (activeIdx >= 0 && activeIdx < static_cast<int>(m_visibleSlots.size()))
+                    {
+                        const RingSlot slotCopy = m_visibleSlots[static_cast<size_t>(activeIdx)];
+                        HWND openHwnd = (!slotCopy.windows.empty() && IsWindow(slotCopy.windows[0].hwnd))
+                            ? slotCopy.windows[0].hwnd
+                            : nullptr;
+                        const bool canClosedSnap = !openHwnd && m_config.dragToSnapLaunchClosed &&
+                            (slotCopy.kind == SlotKind::App || slotCopy.kind == SlotKind::Folder ||
+                             slotCopy.kind == SlotKind::RecycleBin || slotCopy.kind == SlotKind::Website);
+
+                        if (openHwnd || canClosedSnap)
+                        {
+                            CancelPendingPressAndReorder(true);
+                            if (GetCapture() == m_hwnd)
+                                ReleaseCapture();
+                            Dismiss();
+                            if (openHwnd)
+                            {
+                                if (m_callbacks.onStartOpenWindowSnapDrag)
+                                    m_callbacks.onStartOpenWindowSnapDrag(openHwnd, screenPt);
+                            }
+                            else
+                            {
+                                if (m_callbacks.onStartClosedAppSnapDrag)
+                                    m_callbacks.onStartClosedAppSnapDrag(slotCopy.kind, slotCopy.label, slotCopy.pathOrUrl, screenPt);
+                            }
+                            return 0;
+                        }
+                    }
+                }
+
                 if (!m_reorderActive)
                 {
-                    const double movedPx = std::hypot(
-                        static_cast<double>(screenPt.x - m_pressScreenPt.x),
-                        static_cast<double>(screenPt.y - m_pressScreenPt.y));
                     if (movedPx >= 6.0 * m_dpiScale &&
                         m_pressSlotIndex >= 0 && m_pressSlotIndex < pinnedCount &&
                         pinnedCount > 1 && m_filterQuery.empty() && !m_searchArcActive)
@@ -3314,6 +3417,7 @@ namespace winrings
                 m_pressSubIndex = hitSub;
                 m_pressSlotIndex = -1;
                 m_pressScreenPt = screenPt;
+                m_pressStartTick = GetTickCount64();
                 m_selectedSubIndex = hitSub;
                 SetCapture(m_hwnd);
                 return 0;
@@ -3328,6 +3432,7 @@ namespace winrings
                 m_pressSlotIndex = -1;
                 m_pressSubIndex = -1;
                 m_pressScreenPt = screenPt;
+                m_pressStartTick = GetTickCount64();
                 SetCapture(m_hwnd);
                 return 0;
             }
@@ -3339,6 +3444,7 @@ namespace winrings
                 m_pressSlotIndex = hitSlot;
                 m_pressSubIndex = -1;
                 m_pressScreenPt = screenPt;
+                m_pressStartTick = GetTickCount64();
                 m_selectedIndex = hitSlot;
                 SetCapture(m_hwnd);
             }

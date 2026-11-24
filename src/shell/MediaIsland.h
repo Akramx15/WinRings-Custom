@@ -43,6 +43,7 @@ namespace winrings
         bool IsActiveVisible() const noexcept;
         bool HitTestScreenPoint(POINT screenPt) const noexcept;
         void PostExternalWheel(short wheelDelta) noexcept;
+        void PostTouchpadWheel(short wheelDelta) noexcept;
 
     private:
         enum class TransportCmd : int
@@ -84,7 +85,7 @@ namespace winrings
 
         int HitTestControl(POINT clientPt) const noexcept;
         void SendTransportCommand(TransportCmd cmd);
-        void AdjustMasterVolume(int wheelDelta);
+        void AdjustMasterVolume(int wheelDelta, const wchar_t* source, bool fromTouchpadHid);
 
         HMODULE m_module = nullptr;
         HWND m_hwnd = nullptr;
@@ -101,6 +102,10 @@ namespace winrings
         int m_lastVolumePct = 0;
         int m_wheelAccum = 0;
         ULONGLONG m_wheelLastTick = 0;
+        ULONGLONG m_lastRealWheelTick = 0;
+        ULONGLONG m_lastWheelLogTick = 0;
+        LONG m_cachedBarTopPx = 0;
+        LONG m_cachedBarBottomPx = 0;
         bool m_draggingPos = false;
         int m_dragStartCursorX = 0;
         int m_dragStartWinX = 0;

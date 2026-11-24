@@ -9,6 +9,8 @@
 
 namespace winrings
 {
+    void ShellDiagLog(const wchar_t* tag, const wchar_t* fmt, ...) noexcept;
+
     namespace
     {
         constexpr ULONG_PTR kWinRingsInjectedTag = 0x57524E47ull;
@@ -80,10 +82,6 @@ namespace winrings
             m_hidRegistered = false;
         }
         m_hidCache.clear();
-        m_reversals.clear();
-        m_segDx = 0.0;
-        m_segDy = 0.0;
-        m_revBackAccum = 0.0;
         m_cornerPressure = 0;
         m_cornerArmed = true;
         m_physBtnDownNow = false;
@@ -98,17 +96,8 @@ namespace winrings
         if (!m_hwnd)
             return;
 
-        const bool wantMouse = m_config.shakeTriggerEnabled || m_config.hotCornerEnabled;
-        if (wantMouse && !m_mouseRegistered)
-        {
-            RAWINPUTDEVICE rid{};
-            rid.usUsagePage = kUsagePageGenericDesktop;
-            rid.usUsage = kUsageGenericMouse;
-            rid.dwFlags = RIDEV_INPUTSINK;
-            rid.hwndTarget = m_hwnd;
-            m_mouseRegistered = (RegisterRawInputDevices(&rid, 1, sizeof(rid)) != FALSE);
-        }
-        else if (!wantMouse && m_mouseRegistered)
+        const bool wantMouse = m_config.hotCornerEnabled;
+        if (!wantMouse && m_mouseRegistered)
         {
             RAWINPUTDEVICE rid{};
             rid.usUsagePage = kUsagePageGenericDesktop;
@@ -116,24 +105,12 @@ namespace winrings
             rid.dwFlags = RIDEV_REMOVE;
             RegisterRawInputDevices(&rid, 1, sizeof(rid));
             m_mouseRegistered = false;
-            m_reversals.clear();
-            m_segDx = 0.0;
-            m_segDy = 0.0;
-            m_revBackAccum = 0.0;
             m_cornerPressure = 0;
         }
 
-        const bool wantHid = m_config.touchpadPhysLeftClickTrigger || m_config.touchpadCornerTrigger;
-        if (wantHid && !m_hidRegistered)
-        {
-            RAWINPUTDEVICE rid{};
-            rid.usUsagePage = kUsagePageDigitizer;
-            rid.usUsage = kUsageDigitizerTouchPad;
-            rid.dwFlags = RIDEV_INPUTSINK;
-            rid.hwndTarget = m_hwnd;
-            m_hidRegistered = (RegisterRawInputDevices(&rid, 1, sizeof(rid)) != FALSE);
-        }
-        else if (!wantHid && m_hidRegistered)
+        const bool wantHid = m_config.touchpadPhysLeftClickTrigger || m_config.touchpadCornerTrigger ||
+            (m_config.mediaIslandEnabled && m_config.mediaIslandScrollVolume);
+        if (!wantHid && m_hidRegistered)
         {
             RAWINPUTDEVICE rid{};
             rid.usUsagePage = kUsagePageDigitizer;
@@ -145,6 +122,75 @@ namespace winrings
             m_suppressClickUntilTick = 0;
             m_eatingUpForSuppressedDown = false;
             m_tpState = {};
+        }
+
+        EnsureDeviceRegistration();
+    }
+
+    void GestureEngine::EnsureDeviceRegistration()
+    {
+        if (!m_hwnd || !IsWindow(m_hwnd))
+            return;
+
+        const bool wantMouse = m_config.hotCornerEnabled;
+        const bool wantHid = m_config.touchpadPhysLeftClickTrigger || m_config.touchpadCornerTrigger ||
+            (m_config.mediaIslandEnabled && m_config.mediaIslandScrollVolume);
+        if (!wantMouse && !wantHid)
+            return;
+
+        UINT count = 0;
+        if (GetRegisteredRawInputDevices(nullptr, &count, sizeof(RAWINPUTDEVICE)) == static_cast<UINT>(-1) &&
+            GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+        {
+            return;
+        }
+
+        std::vector<RAWINPUTDEVICE> devs(count);
+        if (count > 0)
+        {
+            const UINT actual = GetRegisteredRawInputDevices(devs.data(), &count, sizeof(RAWINPUTDEVICE));
+            if (actual == static_cast<UINT>(-1))
+                devs.clear();
+            else
+                devs.resize(actual);
+        }
+
+        bool hasMouse = false;
+        bool hasHid = false;
+        for (const auto& d : devs)
+        {
+            if (d.hwndTarget != m_hwnd || (d.dwFlags & RIDEV_REMOVE) != 0)
+                continue;
+            if (d.usUsagePage == kUsagePageGenericDesktop && d.usUsage == kUsageGenericMouse)
+                hasMouse = true;
+            else if (d.usUsagePage == kUsagePageDigitizer && d.usUsage == kUsageDigitizerTouchPad)
+                hasHid = true;
+        }
+
+        if (wantMouse && !hasMouse)
+        {
+            const bool wasRegistered = m_mouseRegistered;
+            RAWINPUTDEVICE rid{};
+            rid.usUsagePage = kUsagePageGenericDesktop;
+            rid.usUsage = kUsageGenericMouse;
+            rid.dwFlags = RIDEV_INPUTSINK;
+            rid.hwndTarget = m_hwnd;
+            m_mouseRegistered = (RegisterRawInputDevices(&rid, 1, sizeof(rid)) != FALSE);
+            ShellDiagLog(L"Gesture", L"%s Mouse RawInput (hotCorner) ok=%d",
+                wasRegistered ? L"Recovered" : L"Registered", m_mouseRegistered ? 1 : 0);
+        }
+
+        if (wantHid && !hasHid)
+        {
+            const bool wasRegistered = m_hidRegistered;
+            RAWINPUTDEVICE rid{};
+            rid.usUsagePage = kUsagePageDigitizer;
+            rid.usUsage = kUsageDigitizerTouchPad;
+            rid.dwFlags = RIDEV_INPUTSINK;
+            rid.hwndTarget = m_hwnd;
+            m_hidRegistered = (RegisterRawInputDevices(&rid, 1, sizeof(rid)) != FALSE);
+            ShellDiagLog(L"Gesture", L"%s Touchpad HID RawInput ok=%d",
+                wasRegistered ? L"Recovered" : L"Registered", m_hidRegistered ? 1 : 0);
         }
     }
 
@@ -279,7 +325,7 @@ namespace winrings
 
     void GestureEngine::ProcessMouseRaw(const RAWMOUSE& mouse)
     {
-        if ((mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0)
+        if (!m_config.hotCornerEnabled || (mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0)
             return;
 
         const LONG dx = mouse.lLastX;
@@ -289,142 +335,55 @@ namespace winrings
         if (std::abs(dx) > 800 || std::abs(dy) > 800)
             return;
 
-        const bool ringOpen = m_callbacks.isRingOpen && m_callbacks.isRingOpen();
-        if (ringOpen || IsSuppressedContext())
-        {
-            m_reversals.clear();
-            m_segDx = 0.0;
-            m_segDy = 0.0;
-            m_revBackAccum = 0.0;
-            m_cornerPressure = 0;
-            return;
-        }
-
         const ULONGLONG now = GetTickCount64();
+        if (now < m_cornerCooldownUntil)
+            return;
+
         POINT curPt{};
         if (!GetCursorPos(&curPt))
             return;
 
-        // 1. GNOME Pressure-Barrier Hot Corner
-        if (m_config.hotCornerEnabled && now >= m_cornerCooldownUntil)
+        // GNOME Pressure-Barrier Hot Corner
+        HMONITOR hMon = MonitorFromPoint(curPt, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{ sizeof(mi) };
+        if (!GetMonitorInfoW(hMon, &mi))
+            return;
+
+        const bool inCorner = (m_config.hotCornerPos == HotCornerPos::TopLeft)
+            ? (curPt.x <= mi.rcMonitor.left + 4 && curPt.y <= mi.rcMonitor.top + 4)
+            : (curPt.x >= mi.rcMonitor.right - 5 && curPt.y <= mi.rcMonitor.top + 4);
+
+        if (!inCorner)
         {
-            HMONITOR hMon = MonitorFromPoint(curPt, MONITOR_DEFAULTTONEAREST);
-            MONITORINFO mi{ sizeof(mi) };
-            if (GetMonitorInfoW(hMon, &mi))
-            {
-                const bool inCorner = (m_config.hotCornerPos == HotCornerPos::TopLeft)
-                    ? (curPt.x <= mi.rcMonitor.left + 4 && curPt.y <= mi.rcMonitor.top + 4)
-                    : (curPt.x >= mi.rcMonitor.right - 5 && curPt.y <= mi.rcMonitor.top + 4);
-
-                if (!inCorner)
-                {
-                    m_cornerPressure = 0;
-                    m_cornerArmed = true;
-                }
-                else if (m_cornerArmed)
-                {
-                    if ((now - m_cornerLastPushTick) > 220)
-                        m_cornerPressure = 0;
-
-                    LONG push = 0;
-                    if (m_config.hotCornerPos == HotCornerPos::TopLeft)
-                        push = (std::max)(0L, -dx) + (std::max)(0L, -dy);
-                    else
-                        push = (std::max)(0L, dx) + (std::max)(0L, -dy);
-
-                    if (push > 0)
-                    {
-                        m_cornerPressure += static_cast<int>(push);
-                        m_cornerLastPushTick = now;
-                        if (m_cornerPressure >= m_config.hotCornerPressureThreshold)
-                        {
-                            m_cornerPressure = 0;
-                            m_cornerArmed = false;
-                            m_cornerCooldownUntil = now + 850;
-                            TriggerHotCorner(m_config);
-                            return;
-                        }
-                    }
-                }
-            }
+            m_cornerPressure = 0;
+            m_cornerArmed = true;
+            return;
         }
+        if (!m_cornerArmed)
+            return;
 
-        // 2. Aluminium OS / Magic Pointer 2D Mouse Shake & Circular Swirl Detector
-        if (m_config.shakeTriggerEnabled && now >= m_shakeCooldownUntil && (dx != 0 || dy != 0))
+        if ((now - m_cornerLastPushTick) > 220)
+            m_cornerPressure = 0;
+
+        LONG push = 0;
+        if (m_config.hotCornerPos == HotCornerPos::TopLeft)
+            push = (std::max)(0L, -dx) + (std::max)(0L, -dy);
+        else
+            push = (std::max)(0L, dx) + (std::max)(0L, -dy);
+
+        if (push > 0)
         {
-            if ((m_segDx != 0.0 || m_segDy != 0.0) && (now - m_segLastTick) > 250)
+            m_cornerPressure += static_cast<int>(push);
+            m_cornerLastPushTick = now;
+            if (m_cornerPressure >= m_config.hotCornerPressureThreshold)
             {
-                m_segDx = 0.0;
-                m_segDy = 0.0;
-                m_revBackAccum = 0.0;
-            }
-
-            const double dpiScale = m_callbacks.getDpiScaleAtPoint ? m_callbacks.getDpiScaleAtPoint(curPt) : 1.0;
-            const double minAmpPx = static_cast<double>(m_config.shakeMinAmplitudeDip) * (std::max)(1.0, dpiScale);
-            const double pdx = static_cast<double>(dx);
-            const double pdy = static_cast<double>(dy);
-            const double segLen = std::hypot(m_segDx, m_segDy);
-
-            if (segLen < 8.0)
-            {
-                m_segDx += pdx;
-                m_segDy += pdy;
-                m_revBackAccum = 0.0;
-                m_segLastTick = now;
-            }
-            else
-            {
-                const double ux = m_segDx / segLen;
-                const double uy = m_segDy / segLen;
-                const double proj = pdx * ux + pdy * uy;
-                if (proj >= 0.0)
+                m_cornerPressure = 0;
+                m_cornerArmed = false;
+                const bool ringOpen = m_callbacks.isRingOpen && m_callbacks.isRingOpen();
+                if (!ringOpen && !IsSuppressedContext())
                 {
-                    m_segDx += pdx;
-                    m_segDy += pdy;
-                    m_revBackAccum = (std::max)(0.0, m_revBackAccum - proj);
-                    m_segLastTick = now;
-                }
-                else
-                {
-                    m_revBackAccum += -proj;
-                    m_segLastTick = now;
-                    if (m_revBackAccum >= 6.0)
-                    {
-                        if (segLen >= minAmpPx)
-                            m_reversals.push_back(ShakeReversal{ now, segLen, curPt });
-                        m_segDx = pdx;
-                        m_segDy = pdy;
-                        m_revBackAccum = 0.0;
-                    }
-                }
-            }
-
-            const ULONGLONG winMs = static_cast<ULONGLONG>(m_config.shakeWindowMs);
-            while (!m_reversals.empty() && (now - m_reversals.front().tickMs) > winMs)
-                m_reversals.pop_front();
-
-            if (m_reversals.size() >= static_cast<size_t>(m_config.shakeMinReversals))
-            {
-                double totalPath = 0.0;
-                for (const auto& rev : m_reversals)
-                    totalPath += rev.ampPx;
-
-                const POINT firstPt = m_reversals.front().endPt;
-                const POINT lastPt = m_reversals.back().endPt;
-                const double netDisp = std::hypot(
-                    static_cast<double>(lastPt.x - firstPt.x),
-                    static_cast<double>(lastPt.y - firstPt.y));
-
-                if (totalPath >= minAmpPx * static_cast<double>(m_config.shakeMinReversals) &&
-                    (totalPath / (std::max)(1.0, netDisp)) >= 2.6)
-                {
-                    m_reversals.clear();
-                    m_segDx = 0.0;
-                    m_segDy = 0.0;
-                    m_revBackAccum = 0.0;
-                    m_shakeCooldownUntil = now + 850;
-                    if (m_callbacks.onOpenRing)
-                        m_callbacks.onOpenRing();
+                    m_cornerCooldownUntil = now + 850;
+                    TriggerHotCorner(m_config);
                 }
             }
         }
@@ -533,7 +492,8 @@ namespace winrings
 
     void GestureEngine::ProcessHidRaw(HANDLE hDevice, const RAWHID& hid)
     {
-        if (!m_config.touchpadPhysLeftClickTrigger && !m_config.touchpadCornerTrigger)
+        const bool wantMediaScroll = m_config.mediaIslandEnabled && m_config.mediaIslandScrollVolume;
+        if (!m_config.touchpadPhysLeftClickTrigger && !m_config.touchpadCornerTrigger && !wantMediaScroll)
             return;
 
         const TouchpadCaps& caps = GetOrInspectTouchpad(hDevice);
@@ -659,6 +619,62 @@ namespace winrings
             else
             {
                 m_tpState.cornerTapTracking = false;
+            }
+
+            // Two-finger touchpad vertical scroll over Media Island -> Master Volume control
+            if (wantMediaScroll)
+            {
+                if (contactCount == 2 && tipDown && !physBtn)
+                {
+                    if (!m_tpState.twoFingerScrollActive || (now - m_tpState.twoFingerLastTick) > 250)
+                    {
+                        POINT curPt{};
+                        const bool ringOpen = m_callbacks.isRingOpen && m_callbacks.isRingOpen();
+                        m_tpState.twoFingerScrollActive = true;
+                        m_tpState.twoFingerAccumY = 0.0;
+                        m_tpState.twoFingerLastX = nx;
+                        m_tpState.twoFingerLastY = ny;
+                        m_tpState.twoFingerOverIsland = !ringOpen && GetCursorPos(&curPt) &&
+                            m_callbacks.isPointOverMediaIsland && m_callbacks.isPointOverMediaIsland(curPt);
+                    }
+                    else
+                    {
+                        const double dnx = nx - m_tpState.twoFingerLastX;
+                        const double dny = ny - m_tpState.twoFingerLastY;
+                        m_tpState.twoFingerLastX = nx;
+                        m_tpState.twoFingerLastY = ny;
+                        if (m_tpState.twoFingerOverIsland &&
+                            std::abs(dnx) < 0.25 && std::abs(dny) < 0.25 &&
+                            std::abs(dny) >= std::abs(dnx) * 0.7)
+                        {
+                            // Moving fingers upward on the pad (negative HID Y delta) raises volume (+).
+                            m_tpState.twoFingerAccumY += -dny;
+                            constexpr double kStepFrac = 0.022;
+                            while (std::abs(m_tpState.twoFingerAccumY) >= kStepFrac)
+                            {
+                                const short delta = (m_tpState.twoFingerAccumY > 0.0)
+                                    ? static_cast<short>(30)
+                                    : static_cast<short>(-30);
+                                m_tpState.twoFingerAccumY -= (delta > 0) ? kStepFrac : -kStepFrac;
+                                if (m_callbacks.onMediaIslandTouchpadWheel)
+                                    m_callbacks.onMediaIslandTouchpadWheel(delta);
+                            }
+                        }
+                    }
+                    m_tpState.twoFingerLastTick = now;
+                }
+                else if (contactCount != 0 || !tipDown || physBtn)
+                {
+                    m_tpState.twoFingerScrollActive = false;
+                    m_tpState.twoFingerOverIsland = false;
+                    m_tpState.twoFingerAccumY = 0.0;
+                }
+            }
+            else
+            {
+                m_tpState.twoFingerScrollActive = false;
+                m_tpState.twoFingerOverIsland = false;
+                m_tpState.twoFingerAccumY = 0.0;
             }
 
             m_tpState.prevPhysBtn = physBtn;

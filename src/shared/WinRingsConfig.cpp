@@ -855,6 +855,13 @@ namespace winrings
         }
         TryGetInt(*obj, "mediaIslandOffsetXPct", cfg.mediaIslandOffsetXPct);
 
+        TryGetBool(*obj, "dragToSnapEnabled", cfg.dragToSnapEnabled);
+        TryGetBool(*obj, "dragToSnapLaunchClosed", cfg.dragToSnapLaunchClosed);
+        TryGetInt(*obj, "dragToSnapHoldMs", cfg.dragToSnapHoldMs);
+        cfg.dragToSnapHoldMs = (std::clamp)(cfg.dragToSnapHoldMs, 0, 1000);
+        TryGetInt(*obj, "dragToSnapTearOffDip", cfg.dragToSnapTearOffDip);
+        cfg.dragToSnapTearOffDip = (std::clamp)(cfg.dragToSnapTearOffDip, 12, 160);
+
         const auto pinsIt = obj->find("pinnedSlots");
         if (pinsIt != obj->end() && pinsIt->second.IsArray())
         {
@@ -997,6 +1004,11 @@ namespace winrings
         addBool("mediaIslandMarquee", mediaIslandMarquee);
         addWStr("mediaIslandFullscreenMode", ToString(mediaIslandFullscreenMode));
         addInt("mediaIslandOffsetXPct", mediaIslandOffsetXPct);
+
+        addBool("dragToSnapEnabled", dragToSnapEnabled);
+        addBool("dragToSnapLaunchClosed", dragToSnapLaunchClosed);
+        addInt("dragToSnapHoldMs", dragToSnapHoldMs);
+        addInt("dragToSnapTearOffDip", dragToSnapTearOffDip);
 
         out += "  \"pinnedSlots\": [";
         if (!pinnedSlots.empty())

@@ -665,4 +665,30 @@ namespace winrings
             return (step > 0) ? 0 : (count - 1);
         return (currentIndex + step + count) % count;
     }
+
+    enum class SnapZone
+    {
+        None = 0,
+        Left,
+        Right,
+        TopMaximize
+    };
+
+    inline SnapZone ClassifySnapEdge(
+        int ptX, int ptY,
+        int monLeft, int monTop, int monRight, int monBottom,
+        int sideMarginPx, int topMarginPx) noexcept
+    {
+        if (ptX < monLeft || ptX >= monRight || ptY < monTop || ptY >= monBottom)
+            return SnapZone::None;
+        const int side = (std::max)(8, sideMarginPx);
+        const int top = (std::max)(8, topMarginPx);
+        if (ptX <= monLeft + side)
+            return SnapZone::Left;
+        if (ptX >= monRight - side)
+            return SnapZone::Right;
+        if (ptY <= monTop + top)
+            return SnapZone::TopMaximize;
+        return SnapZone::None;
+    }
 } // namespace winrings

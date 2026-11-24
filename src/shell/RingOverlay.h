@@ -34,6 +34,8 @@ namespace winrings
             std::function<void(const SwitcherConfig& updatedConfig)> saveAndReloadConfig;
             std::function<void()> onToggleTopBarRequested;
             std::function<void()> onToggleMediaIslandRequested;
+            std::function<void(HWND targetHwnd, POINT screenPt)> onStartOpenWindowSnapDrag;
+            std::function<void(SlotKind kind, std::wstring label, std::wstring pathOrUrl, POINT screenPt)> onStartClosedAppSnapDrag;
             std::function<void()> onExitRequested;
             std::function<void()> onOverlayClosed;
         };
@@ -232,6 +234,7 @@ namespace winrings
         int m_pressSlotIndex = -1;
         int m_pressSubIndex = -1;
         POINT m_pressScreenPt{};
+        ULONGLONG m_pressStartTick = 0;
         bool m_reorderActive = false;
         int m_reorderFromIndex = -1;
         int m_reorderCurrentIndex = -1;

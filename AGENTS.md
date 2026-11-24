@@ -6,7 +6,7 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
 
 ## 1. Repository Identity & Upstream Lineage
 
-- **Fork (`origin`):** `https://github.com/Akramx15/WinRings-Custom` (`main` branch, currently **`v3.0.1.0`**)
+- **Fork (`origin`):** `https://github.com/Akramx15/WinRings-Custom` (`main` branch, currently **`v3.0.2.0`**)
 - **Upstream (`upstream`):** `https://github.com/AhmadotEng/WinRings` (synced from release tag **`v3.0.0`**, commit `df4012a`)
 - **Pre-Upgrade Backup Branch:** `v2.0.1-custom-backup` (`8cf2b11`) — historical reference for the v2 custom fork before the v3 upgrade.
 
@@ -42,13 +42,14 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
    - Extends maximized windows behind the minimal top bar without corrupting work area or Z-order, with pill click-through and `Win+\`` hotkey support.
 3. **Media Island** (`src/shell/MediaIsland.*`):
    - Compact Dynamic Island media pill in the top bar powered by WinRT GSMTC (`GlobalSystemMediaTransportControlsSessionManager`).
-   - Features hover expansion card, dynamic tray-width avoidance + progressive shrink (`XamlTaskbarCtrl::GetSystemTrayWidthDip()`), `Alt+Drag` horizontal repositioning (`mediaIslandOffsetXPct`), right-click context menu, scroll-wheel master volume (`IAudioEndpointVolume`), and Z-order fullscreen detection (`SyncWithTaskbar`, `GamesOnly`, `NeverHide`).
-4. **Gesture & Switcher Enhancements** (`src/shell/GestureEngine.*`, `src/shell/InputEngine.*`, `src/shell/WindowTracker.*`, `src/shell/RingOverlay.*`):
+   - Features hover expansion card, dynamic tray-width avoidance + progressive shrink (`XamlTaskbarCtrl::GetSystemTrayWidthDip()`), `Alt+Drag` horizontal repositioning (`mediaIslandOffsetXPct`), right-click context menu, scroll-wheel master volume (`IAudioEndpointVolume` via `WM_MOUSEWHEEL`, `WM_POINTERWHEEL`, `WH_MOUSE_LL`, and `ELAN06FA` 2-finger HID reports), full top-bar-height hit-testing (`y=0..barPx`), and Z-order fullscreen detection (`SyncWithTaskbar`, `GamesOnly`, `NeverHide`).
+4. **Gesture, Switcher & Drag-to-Snap Enhancements** (`src/shell/GestureEngine.*`, `src/shell/InputEngine.*`, `src/shell/WindowTracker.*`, `src/shell/WindowSnapCtrl.*`, `src/shell/RingOverlay.*`):
    - `winKeyTrigger` (Start Menu replacement via Win key, paired with Open-Shell neutralization)
    - `directSwitch` (`Alt+F` / `Win+F` / `Alt+Q` instant cycling with MRU freeze)
-   - Raw Input touchpad physical left-click & corner-tap triggers (`ELAN06FA` HID parsing)
-   - 2D vector mouse shake trigger (`GestureEngine` dot-product reversal check, supports diagonal/circular shakes)
+   - Raw Input touchpad physical left-click, corner-tap, and 2-finger Media Island volume scroll (`ELAN06FA` HID parsing + periodic `GetRegisteredRawInputDevices` auto-recovery)
+   - Ultra-lightweight 2D vector mouse shake trigger in `InputEngine` (`WH_MOUSE_LL` fixed circular array, cached DPI scale, async trigger)
    - GNOME-style hot-corner velocity/pressure flick
+   - Drag-to-Snap / Split-Screen (`WindowSnapCtrl`) from Ring icons (`Tear-off` for pinned, immediate drag for unpinned) and Window Cards (`SC_MOVE` live native Windows 11 Snap Layouts + fallback ghost preview / `Win+Arrow`, plus optional closed pinned app launch & event-driven snap)
    - Ring window card `X` close button, right-click `Run as Administrator` & `End Task`, `Toggle Top Minimal Bar` & `Show Media Island` toggles, `SelectionIndicatorStyle` (`GlowOnly`, `SectorWedge`, `PointerLine`), and `disableRingBlur` performance mode.
 
 ---
@@ -67,8 +68,9 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
    - Respect `disableRingBlur`: when enabled, explicitly hide `m_wcaBackdropHwnd`, skip `m_acrylicBackdrop`, and force `useNoise = false` in both `RingOverlay.cpp` and `SettingsDialog.cpp`.
 4. **Strict `/W4 /WX` Discipline:**
    - Zero compiler warnings tolerated. Explicitly cast `LONG` / `size_t` operands in `std::clamp` / `std::min` / `std::max` calls and avoid shadowed locals (e.g. `slotCount` in `RingOverlay.cpp`).
-5. **`WS_EX_NOACTIVATE` Mouse Wheel Routing (`MediaIsland` + `InputEngine`):**
-   - `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` floating popups do not receive `WM_MOUSEWHEEL` reliably when unfocused (especially from precision touchpads). Do **not** remove `InputEngine::Callbacks::onMediaIslandWheel` routing (`WH_MOUSE_LL` -> `MediaIsland::HitTestScreenPoint` -> `PostExternalWheel`).
+5. **Mouse Wheel, Touchpad HID & Raw Input Reliability (`MediaIsland` + `InputEngine` + `GestureEngine`):**
+   - `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` popups (`MediaIsland`) need both `WM_NCHITTEST -> HTCLIENT`, `WM_POINTERWHEEL`, top-edge full-bar hit-testing (`monTop..monTop+barPx`), `InputEngine` `onMediaIslandWheel` (`WH_MOUSE_LL`), and `ELAN06FA` 2-finger `RIM_TYPEHID` routing (with 80ms dedupe) so mouse wheels AND Precision Touchpads adjust volume reliably.
+   - `RegisterRawInputDevices` inside `explorer.exe` is per-process and can be stolen by Volume / Quick Settings flyouts or File Explorer. Keep Mouse Shake inside `WH_MOUSE_LL` (`InputEngine`), and keep `GestureEngine::EnsureDeviceRegistration()` wired to the 1s watchdog so `hotCorner` & `touchpad HID` recover automatically.
 6. **`SystemTrayFrame` & Z-Order Fullscreen Nuances:**
    - Primary taskbar tray icons on `1280x800` can expand past horizontal center; `MediaIsland` MUST query `XamlTaskbarCtrl::GetSystemTrayWidthDip()` dynamically rather than hardcoding static right bounds.
    - Browser/video fullscreen on Windows 11 leaves `Shell_TrayWnd` visible behind the fullscreen window; fullscreen hiding checks **both** taskbar visibility (`FullWorkAreaCtrl`) and whether an unrelated fullscreen window sits **above** `Shell_TrayWnd` in Z-order.

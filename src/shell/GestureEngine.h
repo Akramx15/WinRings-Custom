@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Windows.h>
-#include <deque>
 #include <functional>
 #include <unordered_map>
 #include <vector>
@@ -18,7 +17,8 @@ namespace winrings
             std::function<bool()> isRingOpen;
             std::function<void()> onToggleRing;
             std::function<void()> onOpenRing;
-            std::function<double(POINT pt)> getDpiScaleAtPoint;
+            std::function<bool(POINT screenPt)> isPointOverMediaIsland;
+            std::function<void(short wheelDelta)> onMediaIslandTouchpadWheel;
         };
 
         GestureEngine() = default;
@@ -30,18 +30,12 @@ namespace winrings
         bool Initialize(HWND hwnd, const SwitcherConfig& cfg, Callbacks callbacks);
         void UpdateConfig(const SwitcherConfig& cfg);
         void Shutdown();
+        void EnsureDeviceRegistration();
 
         void OnRawInput(LPARAM lParam);
         bool ShouldSuppressMouseButton(UINT msg);
 
     private:
-        struct ShakeReversal
-        {
-            ULONGLONG tickMs = 0;
-            double ampPx = 0.0;
-            POINT endPt{};
-        };
-
         struct TouchpadCaps
         {
             bool valid = false;
@@ -67,6 +61,13 @@ namespace winrings
             double cornerStartX = 0.0;
             double cornerStartY = 0.0;
             ULONGLONG lastTriggerTick = 0;
+
+            bool twoFingerScrollActive = false;
+            bool twoFingerOverIsland = false;
+            double twoFingerLastX = 0.0;
+            double twoFingerLastY = 0.0;
+            double twoFingerAccumY = 0.0;
+            ULONGLONG twoFingerLastTick = 0;
         };
 
         void SyncDeviceRegistration();
@@ -84,14 +85,6 @@ namespace winrings
         bool m_mouseRegistered = false;
         bool m_hidRegistered = false;
         bool m_inFlush = false;
-
-        // Aluminium OS / Magic Pointer 2D mouse shake & swirl state
-        double m_segDx = 0.0;
-        double m_segDy = 0.0;
-        double m_revBackAccum = 0.0;
-        ULONGLONG m_segLastTick = 0;
-        std::deque<ShakeReversal> m_reversals;
-        ULONGLONG m_shakeCooldownUntil = 0;
 
         // GNOME pressure-barrier hot corner state
         int m_cornerPressure = 0;

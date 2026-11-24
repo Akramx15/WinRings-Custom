@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include <array>
 #include <functional>
 
 #include "../shared/WinRingsConfig.h"
@@ -33,6 +34,11 @@ namespace winrings
             std::function<void()> onDirectSwitchCommit;
             std::function<bool(UINT msg)> shouldSuppressTouchpadMouse;
             std::function<bool(POINT screenPt, short wheelDelta)> onMediaIslandWheel;
+            std::function<void(POINT screenPt)> onShakeDetected;
+            std::function<bool()> isSnapFallbackDragActive;
+            std::function<void(POINT screenPt)> onSnapFallbackDragMove;
+            std::function<bool(POINT screenPt)> onSnapFallbackDragRelease;
+            std::function<void()> onSnapFallbackDragCancel;
         };
 
         InputEngine() = default;
@@ -45,9 +51,17 @@ namespace winrings
         void Uninstall();
         void UpdateConfig(const SwitcherConfig& config);
         void SetSuspended(bool suspended) noexcept;
+        void UpdateCachedDpiScale(double dpiScale) noexcept;
+        void ResetShakeState() noexcept;
         void ResetTransientState() noexcept;
 
     private:
+        struct ShakeReversal
+        {
+            ULONGLONG tickMs = 0;
+            double ampPx = 0.0;
+            POINT endPt{};
+        };
         static LRESULT CALLBACK KeyboardHookProc(int code, WPARAM wp, LPARAM lp);
         static LRESULT CALLBACK MouseHookProc(int code, WPARAM wp, LPARAM lp);
 
@@ -79,6 +93,22 @@ namespace winrings
         bool m_winKeyDown = false;
         bool m_winComboUsed = false;
         bool m_directSwitchActive = false;
+        bool m_lbtnHeld = false;
+        bool m_rbtnHeld = false;
+        bool m_mbtnHeld = false;
+        double m_cachedDpiScale = 1.0;
+
+        bool m_hasShakeLastPt = false;
+        POINT m_shakeLastPt{};
+        double m_shakeSegDx = 0.0;
+        double m_shakeSegDy = 0.0;
+        double m_shakeRevBackAccum = 0.0;
+        ULONGLONG m_shakeSegLastTick = 0;
+        ULONGLONG m_shakeCooldownUntil = 0;
+        std::array<ShakeReversal, 16> m_shakeReversals{};
+        size_t m_shakeRevHead = 0;
+        size_t m_shakeRevCount = 0;
+
         LONGLONG m_triggerDownQpc = 0;
         LONGLONG m_lastTapQpc = 0;
         LONGLONG m_qpcFreq = 1;

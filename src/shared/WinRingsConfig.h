@@ -199,6 +199,12 @@ namespace winrings
         MediaIslandFullscreenMode mediaIslandFullscreenMode = MediaIslandFullscreenMode::SyncWithTaskbar;
         int mediaIslandOffsetXPct = -1;
 
+        // Drag-to-Snap / Split-Screen (from Ring & Window Cards)
+        bool dragToSnapEnabled = true;
+        bool dragToSnapLaunchClosed = true;
+        int dragToSnapHoldMs = 150;
+        int dragToSnapTearOffDip = 36;
+
         std::vector<PinnedSlotConfig> pinnedSlots;
 
         static std::wstring AppDataDirectory();

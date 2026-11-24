@@ -32,10 +32,10 @@
 
 #define WINRINGS_PRODUCT_VERSION_MAJOR      3
 #define WINRINGS_PRODUCT_VERSION_MINOR      0
-#define WINRINGS_PRODUCT_VERSION_PATCH      1
+#define WINRINGS_PRODUCT_VERSION_PATCH      2
 #define WINRINGS_PRODUCT_VERSION_BUILD      0
-#define WINRINGS_PRODUCT_VERSION_STR_A      "3.0.1.0"
-#define WINRINGS_PRODUCT_VERSION_STR_W      L"3.0.1.0"
+#define WINRINGS_PRODUCT_VERSION_STR_A      "3.0.2.0"
+#define WINRINGS_PRODUCT_VERSION_STR_W      L"3.0.2.0"
 
 // Private, unregistered COM class for Win11 XAML diagnostics site.
 inline constexpr CLSID WinRingsXamlDiagClass =

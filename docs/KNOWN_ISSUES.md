@@ -1,6 +1,16 @@
-# WinRings-Custom — Known Issues & Resolutions (`v3.0.1.0`)
+# WinRings-Custom — Known Issues & Resolutions (`v3.0.2.0`)
 
-Record of all issues tracked during v2.0.1 testing (from Obsidian notes) and how they were diagnosed and fixed in `v3.0.1.0`.
+Record of all issues tracked from Obsidian notes and how they were diagnosed and fixed across `v3.0.1.0` and `v3.0.2.0`.
+
+## Fixed in `v3.0.2.0`
+
+| # | Reported Issue | Root Cause | Resolution in `v3.0.2.0` |
+| :-: | :--- | :--- | :--- |
+| **1** | **Mouse Shake stops working after opening Volume / Quick Settings flyout** | Per-process `RegisterRawInputDevices` (`0x01/0x02`) inside `explorer.exe` can be overwritten or removed silently when XAML flyouts / File Explorer call `RegisterRawInputDevices`, while `m_mouseRegistered` remained `true` and RawInput handlers ran heavy APIs per mouse packet. | Moved 2D Mouse Shake detection into `InputEngine` (`WH_MOUSE_LL` fixed array, cached DPI scale, zero Win32 API calls per pixel, async `PostMessageW` trigger), and added `GestureEngine::EnsureDeviceRegistration()` (`GetRegisteredRawInputDevices`) on the 1s watchdog timer to auto-recover `hotCorner` and `touchpad HID` registration. |
+| **2** | **Scroll over Media Island didn't change volume (Precision Touchpad & top screen edge)** | Precision Touchpad 2-finger scroll bypasses `WH_MOUSE_LL` (`DirectManipulation`/`WM_POINTERWHEEL` or `RIM_TYPEHID`), and hovering the extreme top edge (`y = 0..1`) fell outside the `24px` pill rect (`dstY = 2`). | Expanded `MediaIsland::HitTestScreenPoint` vertically across `monTop .. monTop + barPx`, handled `WM_NCHITTEST` (`HTCLIENT`) + `WM_POINTERWHEEL` + `kMsgExternalWheel` + `kMsgTouchpadWheel` (80ms dedupe, `1%` smooth steps via `kWheelStepThreshold = 30`), and routed `ELAN06FA` 2-finger HID vertical scroll inside `GestureEngine::ProcessHidRaw`. |
+| **3** | **Feature: Drag-to-Snap / Split-Screen directly from Ring icons & Window cards** | Previously, dragging outside the Ring only supported file `OLE Drag-Out` or pinned reorder inside the ring. | Added `WindowSnapCtrl`: dragging an unpinned running slot or outer-arc window card—or tearing off a pinned slot outside `outerRadius + dragToSnapTearOffDip`—restores & attaches the target window under the cursor (`SC_MOVE`, falling back to a Fluent edge ghost preview + `Win+Left/Right/Up` on release if `GUI_INMOVESIZE` declines) and optionally launches + auto-snaps closed pinned apps (`HSHELL_*` event-driven, no polling). |
+
+## Previously Resolved in `v3.0.1.0`
 
 | # | Reported Issue | Root Cause | Resolution in `v3.0.1.0` |
 | :-: | :--- | :--- | :--- |

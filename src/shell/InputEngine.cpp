@@ -56,6 +56,8 @@ namespace winrings
     void InputEngine::UpdateConfig(const SwitcherConfig& config)
     {
         m_config = config;
+        if (!m_config.shakeTriggerEnabled)
+            ResetShakeState();
     }
 
     void InputEngine::SetSuspended(bool suspended) noexcept
@@ -63,6 +65,23 @@ namespace winrings
         m_suspended = suspended;
         if (suspended)
             ResetTransientState();
+    }
+
+    void InputEngine::UpdateCachedDpiScale(double dpiScale) noexcept
+    {
+        m_cachedDpiScale = (dpiScale >= 0.75 && dpiScale <= 5.0) ? dpiScale : 1.0;
+    }
+
+    void InputEngine::ResetShakeState() noexcept
+    {
+        m_hasShakeLastPt = false;
+        m_shakeLastPt = {};
+        m_shakeSegDx = 0.0;
+        m_shakeSegDy = 0.0;
+        m_shakeRevBackAccum = 0.0;
+        m_shakeSegLastTick = 0;
+        m_shakeRevHead = 0;
+        m_shakeRevCount = 0;
     }
 
     void InputEngine::ResetTransientState() noexcept
@@ -75,6 +94,10 @@ namespace winrings
         m_outsideClickOrigin = {};
         m_winKeyDown = false;
         m_winComboUsed = false;
+        m_lbtnHeld = false;
+        m_rbtnHeld = false;
+        m_mbtnHeld = false;
+        ResetShakeState();
         if (m_directSwitchActive)
         {
             m_directSwitchActive = false;
@@ -256,6 +279,13 @@ namespace winrings
 
         if (isDown)
         {
+            if (kb->vkCode == VK_ESCAPE && m_callbacks.isSnapFallbackDragActive && m_callbacks.isSnapFallbackDragActive())
+            {
+                if (m_callbacks.onSnapFallbackDragCancel)
+                    m_callbacks.onSnapFallbackDragCancel();
+                return 1;
+            }
+
             // Priority #1: Direct Window Switch (no popup, fully swallows key so target app receives nothing)
             if (IsDirectSwitchMatch(kb->vkCode))
             {
@@ -436,6 +466,34 @@ namespace winrings
             return 1;
         }
 
+        if (msg == WM_LBUTTONDOWN)
+        {
+            m_lbtnHeld = true;
+            ResetShakeState();
+        }
+        else if (msg == WM_LBUTTONUP)
+        {
+            m_lbtnHeld = false;
+        }
+        else if (msg == WM_RBUTTONDOWN)
+        {
+            m_rbtnHeld = true;
+            ResetShakeState();
+        }
+        else if (msg == WM_RBUTTONUP)
+        {
+            m_rbtnHeld = false;
+        }
+        else if (msg == WM_MBUTTONDOWN)
+        {
+            m_mbtnHeld = true;
+            ResetShakeState();
+        }
+        else if (msg == WM_MBUTTONUP)
+        {
+            m_mbtnHeld = false;
+        }
+
         if (!injectedMouse && m_winKeyDown &&
             (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN ||
              msg == WM_XBUTTONDOWN || msg == WM_MOUSEWHEEL))
@@ -445,6 +503,10 @@ namespace winrings
 
         if (msg == WM_MOUSEMOVE)
         {
+            const bool snapDragActive = m_callbacks.isSnapFallbackDragActive && m_callbacks.isSnapFallbackDragActive();
+            if (snapDragActive && m_callbacks.onSnapFallbackDragMove)
+                m_callbacks.onSnapFallbackDragMove(ms->pt);
+
             if (m_outsideClickPending)
             {
                 const int dragThresh = (std::max)(5, (std::max)(GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)));
@@ -454,12 +516,144 @@ namespace winrings
                     m_outsideClickPending = false;
                 }
             }
-            if ((ms->flags & LLMHF_INJECTED) == 0 && m_callbacks.onUserPointerDelta)
+            if (!injectedMouse && m_callbacks.onUserPointerDelta)
                 m_callbacks.onUserPointerDelta();
             if (ringOpen || m_triggerHeld)
             {
                 if (m_callbacks.onMouseMoved)
                     m_callbacks.onMouseMoved(ms->pt.x, ms->pt.y);
+            }
+
+            if (m_config.shakeTriggerEnabled)
+            {
+                if (injectedMouse)
+                {
+                    ResetShakeState();
+                }
+                else
+                {
+                    const ULONGLONG now = GetTickCount64();
+                    if (snapDragActive || ringOpen || m_triggerHeld || m_lbtnHeld || m_rbtnHeld || m_mbtnHeld ||
+                        now < m_shakeCooldownUntil)
+                    {
+                        ResetShakeState();
+                        m_hasShakeLastPt = true;
+                        m_shakeLastPt = ms->pt;
+                    }
+                    else if (!m_hasShakeLastPt)
+                    {
+                        m_hasShakeLastPt = true;
+                        m_shakeLastPt = ms->pt;
+                    }
+                    else
+                    {
+                        const LONG dx = ms->pt.x - m_shakeLastPt.x;
+                        const LONG dy = ms->pt.y - m_shakeLastPt.y;
+                        m_shakeLastPt = ms->pt;
+                        if (std::abs(dx) > 800 || std::abs(dy) > 800)
+                        {
+                            m_shakeSegDx = 0.0;
+                            m_shakeSegDy = 0.0;
+                            m_shakeRevBackAccum = 0.0;
+                            m_shakeRevHead = 0;
+                            m_shakeRevCount = 0;
+                        }
+                        else if (dx != 0 || dy != 0)
+                        {
+                            if ((m_shakeSegDx != 0.0 || m_shakeSegDy != 0.0) && (now - m_shakeSegLastTick) > 250)
+                            {
+                                m_shakeSegDx = 0.0;
+                                m_shakeSegDy = 0.0;
+                                m_shakeRevBackAccum = 0.0;
+                            }
+
+                            const double minAmpPx = static_cast<double>(m_config.shakeMinAmplitudeDip) *
+                                (std::max)(1.0, m_cachedDpiScale);
+                            const double pdx = static_cast<double>(dx);
+                            const double pdy = static_cast<double>(dy);
+                            const double segLen = std::hypot(m_shakeSegDx, m_shakeSegDy);
+
+                            if (segLen < 8.0)
+                            {
+                                m_shakeSegDx += pdx;
+                                m_shakeSegDy += pdy;
+                                m_shakeRevBackAccum = 0.0;
+                                m_shakeSegLastTick = now;
+                            }
+                            else
+                            {
+                                const double ux = m_shakeSegDx / segLen;
+                                const double uy = m_shakeSegDy / segLen;
+                                const double proj = pdx * ux + pdy * uy;
+                                if (proj >= 0.0)
+                                {
+                                    m_shakeSegDx += pdx;
+                                    m_shakeSegDy += pdy;
+                                    m_shakeRevBackAccum = (std::max)(0.0, m_shakeRevBackAccum - proj);
+                                    m_shakeSegLastTick = now;
+                                }
+                                else
+                                {
+                                    m_shakeRevBackAccum += -proj;
+                                    m_shakeSegLastTick = now;
+                                    if (m_shakeRevBackAccum >= 6.0)
+                                    {
+                                        if (segLen >= minAmpPx)
+                                        {
+                                            if (m_shakeRevCount == m_shakeReversals.size())
+                                            {
+                                                m_shakeRevHead = (m_shakeRevHead + 1) % m_shakeReversals.size();
+                                                --m_shakeRevCount;
+                                            }
+                                            const size_t tail = (m_shakeRevHead + m_shakeRevCount) % m_shakeReversals.size();
+                                            m_shakeReversals[tail] = ShakeReversal{ now, segLen, ms->pt };
+                                            ++m_shakeRevCount;
+                                        }
+                                        m_shakeSegDx = pdx;
+                                        m_shakeSegDy = pdy;
+                                        m_shakeRevBackAccum = 0.0;
+                                    }
+                                }
+                            }
+
+                            const ULONGLONG winMs = static_cast<ULONGLONG>(m_config.shakeWindowMs);
+                            while (m_shakeRevCount > 0 && (now - m_shakeReversals[m_shakeRevHead].tickMs) > winMs)
+                            {
+                                m_shakeRevHead = (m_shakeRevHead + 1) % m_shakeReversals.size();
+                                --m_shakeRevCount;
+                            }
+
+                            if (m_shakeRevCount >= static_cast<size_t>(m_config.shakeMinReversals))
+                            {
+                                double totalPath = 0.0;
+                                for (size_t i = 0; i < m_shakeRevCount; ++i)
+                                    totalPath += m_shakeReversals[(m_shakeRevHead + i) % m_shakeReversals.size()].ampPx;
+
+                                const POINT firstPt = m_shakeReversals[m_shakeRevHead].endPt;
+                                const POINT lastPt = m_shakeReversals[(m_shakeRevHead + m_shakeRevCount - 1) % m_shakeReversals.size()].endPt;
+                                const double netDisp = std::hypot(
+                                    static_cast<double>(lastPt.x - firstPt.x),
+                                    static_cast<double>(lastPt.y - firstPt.y));
+
+                                if (totalPath >= minAmpPx * static_cast<double>(m_config.shakeMinReversals) &&
+                                    (totalPath / (std::max)(1.0, netDisp)) >= 2.6)
+                                {
+                                    const bool anyBtnHeld =
+                                        (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 ||
+                                        (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0 ||
+                                        (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+                                    ResetShakeState();
+                                    if (!anyBtnHeld)
+                                    {
+                                        m_shakeCooldownUntil = now + 850;
+                                        if (m_callbacks.onShakeDetected)
+                                            m_callbacks.onShakeDetected(ms->pt);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             return CallNextHookEx(m_mouseHook, code, wp, lp);
         }
@@ -526,6 +720,12 @@ namespace winrings
                 EndTrigger();
                 return 1;
             }
+        }
+
+        if (msg == WM_LBUTTONUP && m_callbacks.isSnapFallbackDragActive && m_callbacks.isSnapFallbackDragActive())
+        {
+            if (m_callbacks.onSnapFallbackDragRelease && m_callbacks.onSnapFallbackDragRelease(ms->pt))
+                return 1;
         }
 
         // Click outside the overlay in sticky mode cancels only on clean click-release (not when dragging)

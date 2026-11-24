@@ -25,6 +25,7 @@
 #include "RingOverlay.h"
 #include "SlotModel.h"
 #include "TopBarHook.h"
+#include "WindowSnapCtrl.h"
 #include "WindowTracker.h"
 #include "XamlTaskbarCtrl.h"
 
@@ -91,7 +92,27 @@ namespace winrings
         constexpr UINT kWatchdogIntervalMs = 1000;
         constexpr UINT_PTR kTopBarRetryTimerId = 2;
         constexpr UINT kMsgXamlFirstAttached = WM_APP + 300;
+        constexpr UINT kMsgShakeTriggered = WM_APP + 301;
+        constexpr UINT kMsgStartOpenSnap = WM_APP + 302;
+        constexpr UINT kMsgStartClosedSnap = WM_APP + 303;
         constexpr wchar_t kPreviewControlClassW[] = L"WinRings.Preview.Control.v1";
+
+        double QueryPrimaryDpiScale() noexcept
+        {
+            const POINT zero{ 0, 0 };
+            HMONITOR mon = MonitorFromPoint(zero, MONITOR_DEFAULTTOPRIMARY);
+            if (HMODULE shcore = GetModuleHandleW(L"shcore.dll"))
+            {
+                using GetDpiForMonFn = HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*);
+                if (auto fn = reinterpret_cast<GetDpiForMonFn>(GetProcAddress(shcore, "GetDpiForMonitor")))
+                {
+                    UINT dx = 96, dy = 96;
+                    if (SUCCEEDED(fn(mon, 0, &dx, &dy)) && dx >= 72)
+                        return static_cast<double>(dx) / 96.0;
+                }
+            }
+            return 1.0;
+        }
 
         bool IsCurrentProcessExplorer() noexcept
         {
@@ -257,8 +278,13 @@ namespace winrings
                     if (m_armed)
                     {
                         m_tracker.OnShellHookMessage(wp, lp);
-                        if (!m_previewMode && (wp == HSHELL_WINDOWACTIVATED || wp == HSHELL_RUDEAPPACTIVATED))
-                            m_mediaIsland.OnForegroundChanged();
+                        if (!m_previewMode)
+                        {
+                            if (wp == HSHELL_WINDOWACTIVATED || wp == HSHELL_RUDEAPPACTIVATED)
+                                m_mediaIsland.OnForegroundChanged();
+                            if (wp == HSHELL_WINDOWCREATED || wp == HSHELL_WINDOWACTIVATED || wp == HSHELL_RUDEAPPACTIVATED)
+                                m_windowSnap.OnWindowCreatedOrActivated(reinterpret_cast<HWND>(lp));
+                        }
                     }
                     return 0;
                 }
@@ -323,6 +349,11 @@ namespace winrings
                     if (wp == kWatchdogTimerId && !m_previewMode)
                     {
                         CheckHostWatchdog();
+                        if (m_armed)
+                        {
+                            m_gestures.EnsureDeviceRegistration();
+                            m_input.UpdateCachedDpiScale(QueryPrimaryDpiScale());
+                        }
                         return 0;
                     }
                     if (wp == kTopBarRetryTimerId && !m_previewMode)
@@ -345,6 +376,43 @@ namespace winrings
                     }
                     return 0;
 
+                case kMsgShakeTriggered:
+                    if (m_armed && !m_previewMode && !m_overlay.IsOpen())
+                    {
+                        bool suppressed = false;
+                        if (m_config.shakeSuppressFullscreen)
+                        {
+                            QUERY_USER_NOTIFICATION_STATE quns = QUNS_ACCEPTS_NOTIFICATIONS;
+                            if (SUCCEEDED(SHQueryUserNotificationState(&quns)) &&
+                                (quns == QUNS_RUNNING_D3D_FULL_SCREEN || quns == QUNS_PRESENTATION_MODE))
+                            {
+                                suppressed = true;
+                            }
+                        }
+                        if (!suppressed)
+                            OpenRingAt(m_pendingShakePt.x, m_pendingShakePt.y, true);
+                    }
+                    return 0;
+
+                case kMsgStartOpenSnap:
+                    if (m_armed && !m_previewMode && m_pendingOpenSnapHwnd)
+                    {
+                        HWND target = m_pendingOpenSnapHwnd;
+                        const POINT pt = m_pendingOpenSnapPt;
+                        m_pendingOpenSnapHwnd = nullptr;
+                        m_windowSnap.BeginOpenWindowDrag(target, pt);
+                    }
+                    return 0;
+
+                case kMsgStartClosedSnap:
+                    if (m_armed && !m_previewMode && m_hasPendingClosedSnap)
+                    {
+                        PendingClosedSnap req = std::move(m_pendingClosedSnap);
+                        m_hasPendingClosedSnap = false;
+                        m_windowSnap.BeginClosedAppDrag(req.kind, std::move(req.label), std::move(req.pathOrUrl), req.screenPt);
+                    }
+                    return 0;
+
                 case WM_INPUT:
                     if (m_armed && !m_previewMode)
                         m_gestures.OnRawInput(lp);
@@ -354,6 +422,7 @@ namespace winrings
                 case WM_SETTINGCHANGE:
                     if (m_armed && !m_previewMode)
                     {
+                        m_input.UpdateCachedDpiScale(QueryPrimaryDpiScale());
                         if (m_config.topBarEnabled)
                             ApplyTopBarState(true);
                         m_mediaIsland.RefreshLayoutAndVisibility();
@@ -447,6 +516,22 @@ namespace winrings
                 };
                 overlayCb.onToggleMediaIslandRequested = [this]() {
                     ToggleMediaIsland();
+                };
+                overlayCb.onStartOpenWindowSnapDrag = [this](HWND targetHwnd, POINT screenPt) {
+                    if (!m_previewMode && m_controlHwnd && targetHwnd)
+                    {
+                        m_pendingOpenSnapHwnd = targetHwnd;
+                        m_pendingOpenSnapPt = screenPt;
+                        PostMessageW(m_controlHwnd, kMsgStartOpenSnap, 0, 0);
+                    }
+                };
+                overlayCb.onStartClosedAppSnapDrag = [this](SlotKind kind, std::wstring label, std::wstring pathOrUrl, POINT screenPt) {
+                    if (!m_previewMode && m_controlHwnd)
+                    {
+                        m_pendingClosedSnap = PendingClosedSnap{ kind, std::move(label), std::move(pathOrUrl), screenPt };
+                        m_hasPendingClosedSnap = true;
+                        PostMessageW(m_controlHwnd, kMsgStartClosedSnap, 0, 0);
+                    }
                 };
                 overlayCb.onExitRequested = [this]() {
                     if (m_previewMode)
@@ -582,13 +667,36 @@ namespace winrings
                     m_mediaIsland.PostExternalWheel(delta);
                     return true;
                 };
+                inputCb.onShakeDetected = [this](POINT pt) {
+                    if (!m_previewMode && m_controlHwnd)
+                    {
+                        m_pendingShakePt = pt;
+                        PostMessageW(m_controlHwnd, kMsgShakeTriggered, 0, 0);
+                    }
+                };
+                inputCb.isSnapFallbackDragActive = [this]() {
+                    return !m_previewMode && m_windowSnap.IsFallbackDragActive();
+                };
+                inputCb.onSnapFallbackDragMove = [this](POINT pt) {
+                    if (!m_previewMode)
+                        m_windowSnap.OnFallbackDragMove(pt);
+                };
+                inputCb.onSnapFallbackDragRelease = [this](POINT pt) {
+                    return !m_previewMode && m_windowSnap.OnFallbackDragRelease(pt);
+                };
+                inputCb.onSnapFallbackDragCancel = [this]() {
+                    if (!m_previewMode)
+                        m_windowSnap.CancelActiveDrag();
+                };
 
                 m_input.Install(m_config, std::move(inputCb));
+                m_input.UpdateCachedDpiScale(QueryPrimaryDpiScale());
                 m_input.SetSuspended(false);
                 m_armed = true;
 
                 if (!forPreview)
                 {
+                    m_windowSnap.Initialize(m_shellModule);
                     m_fullWorkArea.Initialize(m_shellModule, m_config, [this]() {
                         m_mediaIsland.OnTaskbarVisibilityChanged(m_fullWorkArea.IsTaskbarHidden());
                     });
@@ -626,18 +734,11 @@ namespace winrings
                             }
                         },
                         [this](POINT pt) {
-                            HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-                            if (HMODULE shcore = GetModuleHandleW(L"shcore.dll"))
-                            {
-                                using GetDpiForMonFn = HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*);
-                                if (auto fn = reinterpret_cast<GetDpiForMonFn>(GetProcAddress(shcore, "GetDpiForMonitor")))
-                                {
-                                    UINT dx = 96, dy = 96;
-                                    if (SUCCEEDED(fn(mon, 0, &dx, &dy)) && dx >= 72)
-                                        return static_cast<double>(dx) / 96.0;
-                                }
-                            }
-                            return m_overlay.DpiScale();
+                            return !m_previewMode && m_mediaIsland.HitTestScreenPoint(pt);
+                        },
+                        [this](short delta) {
+                            if (!m_previewMode)
+                                m_mediaIsland.PostTouchpadWheel(delta);
                         }
                     });
 
@@ -649,11 +750,11 @@ namespace winrings
                         m_config.topBarHeightDip, m_config.topBarHideAppButtons ? 1 : 0,
                         hookOk ? 1 : 0);
                     ShellDiagLog(L"ShellCtrl",
-                        L"Custom modules armed: FullWorkArea=%d MediaIsland=%d WinKey=%d DirectSwitch=%d TpClick=%d Shake=%d HotCorner=%d",
+                        L"Custom modules armed: FullWorkArea=%d MediaIsland=%d WinKey=%d DirectSwitch=%d TpClick=%d Shake=%d HotCorner=%d DragSnap=%d",
                         m_config.fullWorkAreaEnabled ? 1 : 0, m_config.mediaIslandEnabled ? 1 : 0,
                         m_config.winKeyTrigger ? 1 : 0, m_config.directSwitchEnabled ? 1 : 0,
                         m_config.touchpadPhysLeftClickTrigger ? 1 : 0, m_config.shakeTriggerEnabled ? 1 : 0,
-                        m_config.hotCornerEnabled ? 1 : 0);
+                        m_config.hotCornerEnabled ? 1 : 0, m_config.dragToSnapEnabled ? 1 : 0);
 
                     HWND ctrlHwnd = m_controlHwnd;
                     XamlTaskbarCtrl::StartAttachment(m_shellModule, m_config, [ctrlHwnd]() {
@@ -688,9 +789,12 @@ namespace winrings
                 m_tracker.SetMruFrozen(false);
                 m_directSwitchList.clear();
                 m_directSwitchIndex = 0;
+                m_pendingOpenSnapHwnd = nullptr;
+                m_hasPendingClosedSnap = false;
                 m_input.Uninstall();
                 if (!m_previewMode)
                 {
+                    m_windowSnap.Shutdown();
                     m_gestures.Shutdown();
                     m_mediaIsland.Shutdown();
                     m_fullWorkArea.Shutdown();
@@ -789,6 +893,7 @@ namespace winrings
             {
                 m_overlay.SetConfig(m_config);
                 m_input.UpdateConfig(m_config);
+                m_input.UpdateCachedDpiScale(QueryPrimaryDpiScale());
                 if (!m_previewMode)
                 {
                     m_gestures.UpdateConfig(m_config);
@@ -883,6 +988,14 @@ namespace winrings
             uint64_t m_topBarDesiredGen = 0;
             uint64_t m_topBarHookAppliedGen = 0;
 
+            struct PendingClosedSnap
+            {
+                SlotKind kind = SlotKind::App;
+                std::wstring label;
+                std::wstring pathOrUrl;
+                POINT screenPt{};
+            };
+
             SwitcherConfig m_config;
             AppIndex m_appIndex;
             WindowTracker m_tracker;
@@ -891,8 +1004,14 @@ namespace winrings
             FullWorkAreaCtrl m_fullWorkArea;
             GestureEngine m_gestures;
             MediaIsland m_mediaIsland;
+            WindowSnapCtrl m_windowSnap;
             std::vector<HWND> m_directSwitchList;
             size_t m_directSwitchIndex = 0;
+            POINT m_pendingShakePt{};
+            HWND m_pendingOpenSnapHwnd = nullptr;
+            POINT m_pendingOpenSnapPt{};
+            PendingClosedSnap m_pendingClosedSnap;
+            bool m_hasPendingClosedSnap = false;
         };
 
         std::atomic<bool> g_explorerStarted{ false };

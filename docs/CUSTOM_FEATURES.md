@@ -1,4 +1,4 @@
-# WinRings-Custom Features (`v3.0.1.0`)
+# WinRings-Custom Features (`v3.0.2.0`)
 
 `WinRings-Custom` combines **upstream `WinRings v3.0.0`** (`WCA` native acrylic + 3D beveled glass edges, `m_outsideClickPending` click-vs-drag guard, `isRingDragActive` reorder guard, `explorer.exe` folder icon fix, slim core binary) with Akram's unified Windows 11 desktop enhancements:
 
@@ -28,7 +28,7 @@
 - **Smart Dynamic Tray-Avoidance & Auto-Shrink:** Uses real `SystemTrayFrame.ActualWidth()` so the pill never overlaps crowded notification tray icons on `1280x800` displays, shifting left and compacting width proportionally when space is tight.
 - **`Alt + Drag` Repositioning + Reset:** Hold `Alt` and drag the pill horizontally to save a custom percentage (`mediaIslandOffsetXPct`), or reset via right-click menu / **Reset Island Position** in Settings.
 - **Right-Click Context Menu:** Right-clicking Media Island opens `Hide Media Island`, `Reset Position`, and `Settings...`; also toggleable anytime from Tray (`Show Media Island`), Ring menu, or `--toggle-media-island`.
-- **Scroll-Wheel Master Volume:** Scrolling vertically over the Media Island pill adjusts Windows master volume by `±2%` per notch (`mediaIslandScrollVolume`), routed cleanly through `InputEngine` (`WH_MOUSE_LL`) so unfocused `WS_EX_NOACTIVATE` popups respond even from precision touchpads.
+- **Scroll-Wheel Master Volume:** Scrolling vertically over the Media Island pill—or anywhere along the full top bar height directly above it (`y = 0 .. barPx`)—adjusts Windows master volume by `±1%` per fine step (`mediaIslandScrollVolume`), supporting standard mice (`WH_MOUSE_LL`), `WM_POINTERWHEEL`, and `ELAN06FA` Precision Touchpad two-finger HID scroll (`RIM_TYPEHID`) with duplicate-event filtering.
 - **Fullscreen Modes (`mediaIslandFullscreenMode`):**
   - `SyncWithTaskbar` (default): Hides automatically when a fullscreen window (e.g. YouTube/browser video or borderless fullscreen app) covers the primary monitor above `Shell_TrayWnd` in Z-order, or when the taskbar hides.
   - `GamesOnly`: Hides only for fullscreen fullscreen apps/games outside `SyncWithTaskbar` triggers.
@@ -40,14 +40,18 @@
 
 - **Win Key Start Replacement (`winKeyTrigger`):** Pressing Windows key opens WinRings instead of Start Menu (deployed alongside HKCU Open-Shell neutralization).
 - **Direct Window Switch (`directSwitchEnabled`):** `Alt + F` (configurable to `Win + F` or `Alt + Q`) cycles windows immediately without rendering a switcher popup, freezing MRU order until modifier release.
-- **Touchpad Physical Left-Click & Corner Tap (`ELAN06FA` HID):** Parses raw HID touchpad button & contact coordinates to distinguish physical left-click button presses from touchpad tap-to-click (`touchpadPhysLeftClickTrigger`), plus optional corner taps (`touchpadCornerTrigger`).
-- **2D Mouse Shake (`shakeTriggerEnabled`):** Uses 2D direction-reversal vector analysis (dot product + amplitude threshold) to recognize horizontal, diagonal (thumb shake), and circular shake motions without accidental false triggers.
+- **Touchpad Physical Left-Click, Corner Tap & 2-Finger Volume (`ELAN06FA` HID):** Parses raw HID touchpad button & contact coordinates to distinguish physical left-click button presses from touchpad tap-to-click (`touchpadPhysLeftClickTrigger`), optional corner taps (`touchpadCornerTrigger`), and 2-finger scroll over Media Island, with automatic `GetRegisteredRawInputDevices` self-healing.
+- **2D Mouse Shake (`shakeTriggerEnabled`):** Runs directly inside `InputEngine` (`WH_MOUSE_LL`, cached DPI scale, fixed circular buffer, zero Win32 API calls per pixel) so Volume/Quick Settings flyouts can never steal it; recognizes horizontal, diagonal (thumb shake), and circular shake motions without accidental false triggers.
 - **GNOME Hot Corner (`hotCornerEnabled`):** Triggers Task View (`Win+Tab`) or WinRings only when flicking with deliberate velocity/pressure into the configured top corner (`Top-Left` / `Top-Right`).
 
 ---
 
-## 5. Radial Ring Customizations (`RingOverlay` + `SettingsDialog`)
+## 5. Radial Ring Customizations & Drag-to-Snap (`RingOverlay` + `WindowSnapCtrl` + `SettingsDialog`)
 
+- **Drag-to-Snap / Split-Screen (`dragToSnapEnabled`):**
+  - Dragging an **outer-arc Window Card** or **unpinned running Ring slot** immediately dismisses the ring, restores & attaches the window under the cursor, and triggers Windows 11 native live drag (`SC_MOVE`, engaging Aero Snap & **Snap Assist**).
+  - Dragging a **pinned Ring slot** inside the ring reorders pins normally; pulling it past `outerRadius + dragToSnapTearOffDip` after `dragToSnapHoldMs` cancels temporary reordering cleanly and snaps the open app—or optionally launches & auto-snaps a closed pinned app/folder/Recycle Bin/website (`dragToSnapLaunchClosed`) via `HSHELL_*` events (zero polling).
+  - If a custom-chrome/elevated window declines cross-process `SC_MOVE`, WinRings automatically switches within `65 ms` to a translucent Fluent edge-snap preview (`Left`, `Right`, `Maximize`) and triggers native `Win + Arrow` on release.
 - **Window Card `X` Close Button:** Clicking the `X` close badge on hovered outer-arc window cards closes that window immediately without activating it.
 - **Ring & Card Context Actions:** Right-click slots/windows for **Run as Administrator**, **Close Window**, **End Task** (`TerminateProcessByPid`), **Toggle Top Minimal Bar**, and **Show Media Island**.
 - **Selection Indicator Styles (`selectionIndicator`):** `GlowOnly`, `SectorWedge` (restored classic v1 blue wedge accent), or `PointerLine`.
