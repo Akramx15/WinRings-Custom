@@ -1,4 +1,4 @@
-# WinRings-Custom Features (`v3.0.6.0`)
+# WinRings-Custom Features (`v3.0.7.0`)
 
 `WinRings-Custom` combines **upstream `WinRings v3.0.0`** (`WCA` native acrylic + 3D beveled glass edges, `m_outsideClickPending` click-vs-drag guard, `isRingDragActive` reorder guard, `explorer.exe` folder icon fix, slim core binary) with Akram's unified Windows 11 desktop enhancements:
 
@@ -17,6 +17,7 @@
 ## 2. FullWorkArea Integration (`FullWorkAreaCtrl`)
 
 - **Extend Maximized Windows Behind Top Bar:** Dynamically removes artificial top reservation so maximized apps utilize full vertical screen space (`fullWorkAreaEnabled`) on Windows 11 26H2 (`26300+`).
+- **Post-Sleep/Wake & Unlock Zero-Drop Refit:** Subscribes to Modern Standby `GUID_CONSOLE_DISPLAY_STATE` display-on power broadcasts in both `FullWorkAreaCtrl` and `WinRingsHost`, removes wake burst throttling, extends wake follow-ups through `+1400 ms`, and performs zero-flicker `DWMWA_EXTENDED_FRAME_BOUNDS`-compensated `SetWindowPos` refit (`WINRINGS_ADMIN_ACT_REFIT_MAXIMIZED` relay for elevated Admin windows such as Antigravity) whenever `rcWork` reset pushes maximized apps down below the top bar.
 - **Pill Click-Through & Auto-Hide Sync:** Works with floating pills and notifies `MediaIsland` whenever the taskbar auto-hides (`OnTaskbarVisibilityChanged`), plus optional `Win+\`` hotkey toggle (`fullWorkAreaHotkeys`).
 
 ---

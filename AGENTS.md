@@ -6,7 +6,7 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
 
 ## 1. Repository Identity & Upstream Lineage
 
-- **Fork (`origin`):** `https://github.com/Akramx15/WinRings-Custom` (`main` branch, currently **`v3.0.6.0`**)
+- **Fork (`origin`):** `https://github.com/Akramx15/WinRings-Custom` (`main` branch, currently **`v3.0.7.0`**)
 - **Upstream (`upstream`):** `https://github.com/AhmadotEng/WinRings` (synced from release tag **`v3.0.0`**, commit `df4012a`)
 - **Pre-Upgrade Backup Branch:** `v2.0.1-custom-backup` (`8cf2b11`) — historical reference for the v2 custom fork before the v3 upgrade.
 
@@ -39,7 +39,7 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
 1. **Unified Minimal Top Bar** (`src/shell/TopBarHook.*`, `src/shell/XamlTaskbarCtrl.*`, `src/shared/ClockFormat.h`):
    - Docks Windows 11 taskbar cleanly to the top edge (`28–40 DIP`), supports single-line compact clock formatting/casing, selective hiding of app buttons / Start / Search / Task View / Widgets, backdrop styles, live XAML `SystemTrayFrame.ActualWidth()` reporting, and synchronous `Shell_TrayWnd` `WM_WINDOWPOSCHANGING` top-lock + immediate wake/display/unlock sync so Sleep/Wake never flashes the bar to the bottom.
 2. **FullWorkArea Integration** (`src/shell/FullWorkAreaCtrl.*`):
-   - Extends maximized windows behind the minimal top bar without corrupting work area or Z-order, with pill click-through, `0 ms` wake/display recovery, and `Win+\`` hotkey support.
+   - Extends maximized windows behind the minimal top bar without corrupting work area or Z-order, with pill click-through, Modern Standby display-on (`GUID_CONSOLE_DISPLAY_STATE`) & `0 ms` wake recovery, zero-flicker refit of pushed-down maximized windows (both Medium-IL and elevated High-IL via `WINRINGS_ADMIN_ACT_REFIT_MAXIMIZED` -> `WinRingsHost.exe`), and `Win+\`` hotkey support.
 3. **Media Island** (`src/shell/MediaIsland.*`):
    - Compact Dynamic Island media pill in the top bar powered by WinRT GSMTC (`GlobalSystemMediaTransportControlsSessionManager`).
    - Features hover expansion card, dynamic tray-width avoidance + progressive shrink (`XamlTaskbarCtrl::GetSystemTrayWidthDip()`), `Alt+Drag` horizontal repositioning (`mediaIslandOffsetXPct`), right-click context menu, scroll-wheel master volume (`IAudioEndpointVolume` via `WM_MOUSEWHEEL`, `WM_POINTERWHEEL`, `WH_MOUSE_LL`, and `ELAN06FA` 2-finger HID reports), full top-bar-height hit-testing (`y=0..barPx`), and Z-order fullscreen detection (`SyncWithTaskbar`, `GamesOnly`, `NeverHide`).

@@ -472,16 +472,18 @@ namespace winrings
                     }
                     if (wp == kWakeFollowUpTimerId && !m_previewMode)
                     {
+                        static constexpr UINT kWakeFollowUpDelaysMs[] = { 100u, 200u, 400u, 700u };
                         if (m_armed)
                         {
                             ApplyTopBarState(true);
                             m_fullWorkArea.OnWakeOrUnlockImmediate();
                             m_mediaIsland.RefreshLayoutAndVisibility();
                         }
-                        if (--m_wakeFollowUpRemaining <= 0)
+                        ++m_wakeFollowUpStep;
+                        if (m_wakeFollowUpStep >= _countof(kWakeFollowUpDelaysMs))
                             KillTimer(hwnd, kWakeFollowUpTimerId);
                         else
-                            SetTimer(hwnd, kWakeFollowUpTimerId, 200, nullptr);
+                            SetTimer(hwnd, kWakeFollowUpTimerId, kWakeFollowUpDelaysMs[m_wakeFollowUpStep], nullptr);
                         return 0;
                     }
                     break;
@@ -896,7 +898,7 @@ namespace winrings
                     KillTimer(m_controlHwnd, kTopBarRetryTimerId);
                     KillTimer(m_controlHwnd, kWakeFollowUpTimerId);
                 }
-                m_wakeFollowUpRemaining = 0;
+                m_wakeFollowUpStep = 0;
 
                 m_armed = false;
                 m_topBarHookAppliedGen = 0;
@@ -1107,8 +1109,8 @@ namespace winrings
                 m_mediaIsland.RefreshLayoutAndVisibility();
                 if (m_controlHwnd)
                 {
-                    m_wakeFollowUpRemaining = 2;
-                    SetTimer(m_controlHwnd, kWakeFollowUpTimerId, 120, nullptr);
+                    m_wakeFollowUpStep = 0;
+                    SetTimer(m_controlHwnd, kWakeFollowUpTimerId, 100, nullptr);
                 }
             }
 
@@ -1223,7 +1225,7 @@ namespace winrings
             ULONGLONG m_lastWatchdogReinstallTick = 0;
             ULONGLONG m_lastRingToggleTick = 0;
             int m_watchdogMouseStallTicks = 0;
-            int m_wakeFollowUpRemaining = 0;
+            size_t m_wakeFollowUpStep = 0;
             PendingClosedSnap m_pendingClosedSnap;
             bool m_hasPendingClosedSnap = false;
         };

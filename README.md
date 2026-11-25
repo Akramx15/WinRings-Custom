@@ -1,4 +1,4 @@
-# WinRings-Custom (`v3.0.6.0`) — Unified Windows 11 Radial Switcher, Top Minimal Bar & Media Island
+# WinRings-Custom (`v3.0.7.0`) — Unified Windows 11 Radial Switcher, Top Minimal Bar & Media Island
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20x64-0078D4?logo=windows11)](https://github.com/Akramx15/WinRings-Custom)
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17%20%28Pure%20Native%20%2FMT%29-00599C?logo=cplusplus)](https://github.com/Akramx15/WinRings-Custom)
@@ -12,11 +12,11 @@ For AI coding assistants & maintainers, see **[AGENTS.md](AGENTS.md)**, **[CLAUD
 
 ---
 
-## What's Added in WinRings-Custom (`v3.0.6.0`)
+## What's Added in WinRings-Custom (`v3.0.7.0`)
 
-- **Full Administrator Window Support (`ElevationUtil.h` + `WinRingsHost` Admin Bridge):** Triggers (`Win`, `Alt+Space`, Mouse Trigger, 2D Shake, Touchpad Corner Tap, Physical Left-Click, `Alt+F`, Media Island scroll wheel) and window operations (Focus, Minimize, Close `X`, End Task, Live Drag-to-Snap & Direct Snap) now work natively over **Run as Administrator (High-IL)** windows (Admin Antigravity, Admin Brave, Task Manager, elevated terminals) without running `explorer.exe` elevated. Paired with zero-UAC `WinRings_Host_Elevated` Task Scheduler autostart in `Deploy-WinRings.ps1`.
+- **Full Administrator Window Support (`ElevationUtil.h` + `WinRingsHost` Admin Bridge):** Triggers (`Win`, `Alt+Space`, Mouse Trigger, 2D Shake, Touchpad Corner Tap, Physical Left-Click, `Alt+F`, Media Island scroll wheel) and window operations (Focus, Minimize, Close `X`, End Task, Live Drag-to-Snap, Direct Snap, and Post-Wake Maximized Refit) now work natively over **Run as Administrator (High-IL)** windows (Admin Antigravity, Admin Brave, Task Manager, elevated terminals) without running `explorer.exe` elevated. Paired with zero-UAC `WinRings_Host_Elevated` Task Scheduler autostart in `Deploy-WinRings.ps1`.
 - **Unified Minimal Top Bar (`TopBarHook` + `XamlTaskbarCtrl` + `ClockFormat.h`):** Docks the Windows 11 taskbar cleanly to the top edge (`28–40 DIP`), hides cluttered elements while keeping the native System Tray, formats a compact single-line clock, exposes live `SystemTrayFrame.ActualWidth()`, and keeps a synchronous `Shell_TrayWnd` `WM_WINDOWPOSCHANGING` top-lock + `0 ms` wake/display/unlock resync to eliminate Sleep/Wake bottom-edge flashes.
-- **FullWorkArea Integration (`FullWorkAreaCtrl`):** Extends maximized windows behind the minimal top bar on Windows 11 26H2 (`26300+`) with immediate wake recovery.
+- **FullWorkArea Integration (`FullWorkAreaCtrl`):** Extends maximized windows behind the minimal top bar on Windows 11 26H2 (`26300+`) with Modern Standby `GUID_CONSOLE_DISPLAY_STATE` display-on recovery, immediate `WM_SETTINGCHANGE` `rcWork` restoration, and zero-flicker refit of pushed-down maximized windows (Medium-IL and Admin High-IL via `WinRingsHost`).
 - **Dynamic Media Island (`MediaIsland`):** GSMTC now-playing pill inside the top bar with hover expand card, dynamic tray-avoidance & proportional shrink, `Alt + Drag` custom horizontal placement, right-click menu + `Show Media Island` tray/ring toggle, Z-order fullscreen detection (`SyncWithTaskbar` / `GamesOnly` / `NeverHide`), immediate wake re-anchor, and scroll-wheel master volume control (mice, `WM_POINTERWHEEL`, top screen edge `y=0..barPx`, and `ELAN06FA` 2-finger HID).
 - **Resilient `WH_MOUSE_LL` 2D Mouse Shake, GNOME Hot Corner, Win Key & Precision Touchpad (`InputEngine` + `GestureEngine` + `ShellController`):** Post-heavy-init hook installation + UIPI-aware watchdog cursor-heartbeat recovery against boot hook eviction, PTP `LLMHF_INJECTED`-safe 2D shake detection, `ELAN06FA` serial multi-contact HID corner tap with `350 ms` idle recovery, optional Win-key replacement, and `Alt+F`/`Win+F`/`Alt+Q` Direct Window Switch.
 - **Drag-to-Snap Split-Screen & Ring UX (`WindowSnapCtrl` + `RingOverlay` + `SlotModel`):** Drag window cards or tear-off ring slots with lightweight real-time live window movement (`60Hz` `SWP_ASYNCWINDOWPOS`), Fluent edge preview, pixel-perfect **Direct Snap** with immediate foreground focus (`DWMWA_EXTENDED_FRAME_BOUNDS` compensated, or optional `dragToSnapUseSnapAssist` for `Win+Arrow` Snap Assist), closed-app launch & snap, window card `X` close button, right-click **`Open`**, **`Run as Administrator`**, **`Open File Location`**, and **`Pin to Ring` / `Unpin from Ring`** directly on **Search Arc** results (`.lnk` & UWP-aware) as well as main ring slots, **End Task**, `SelectionIndicatorStyle`, and `disableRingBlur`.
@@ -101,10 +101,10 @@ flowchart LR
     Shell --> Input
 ```
 
-| Binary | Size (`v3.0.6.0`) | Role |
+| Binary | Size (`v3.0.7.0`) | Role |
 | :--- | :--- | :--- |
-| **`WinRingsHost.exe`** | `~329 KB` | Resident elevated Admin Input & Window Action Bridge (`WinRings_Host_Elevated` zero-UAC task), custom cyan ring tray icon (`Toggle Top Minimal Bar`, `Show Media Island`), Explorer injection handshake, 3-crash-in-180s safety circuit breaker, and CLI dispatcher. |
-| **`WinRingsShell.dll`** | `~939 KB` | In-process Explorer module hosting `RingOverlay`, `AcrylicBackdrop`, `RingThemeEngine`, `AppIndex`, `DwmThumbPool`, `InputEngine`, `WindowTracker`, `WindowSnapCtrl`, `SlotModel`, `DropTarget`, plus unified `TopBarHook`, `XamlTaskbarCtrl`, `FullWorkAreaCtrl`, `GestureEngine`, and `MediaIsland`. |
+| **`WinRingsHost.exe`** | `~330 KB` | Resident elevated Admin Input & Window Action Bridge (`WinRings_Host_Elevated` zero-UAC task), custom cyan ring tray icon (`Toggle Top Minimal Bar`, `Show Media Island`), Explorer injection handshake, 3-crash-in-180s safety circuit breaker, and CLI dispatcher. |
+| **`WinRingsShell.dll`** | `~942 KB` | In-process Explorer module hosting `RingOverlay`, `AcrylicBackdrop`, `RingThemeEngine`, `AppIndex`, `DwmThumbPool`, `InputEngine`, `WindowTracker`, `WindowSnapCtrl`, `SlotModel`, `DropTarget`, plus unified `TopBarHook`, `XamlTaskbarCtrl`, `FullWorkAreaCtrl`, `GestureEngine`, and `MediaIsland`. |
 | **`WinRingsTools.exe`** | `~423 KB` | Dark-mode native Win32/Direct2D 1.1/WIC 5-page Settings UI (`1040x760` with persistent 1:1 GPU Ring preview). |
 | **`WinRingsSetup.exe`** | `~1.80 MB` | Self-contained per-user installer embedding all 3 binaries as `RT_RCDATA` with `BCrypt` SHA-256 verification. |
 
@@ -160,29 +160,29 @@ If you prefer managing startup items via `shell:startup` (`C:\Users\<User>\AppDa
 
 ```powershell
 # Check live host & shell status
-& "$env:LOCALAPPDATA\WinRings\v3.0.6.0\WinRingsHost.exe" --status
+& "$env:LOCALAPPDATA\WinRings\v3.0.7.0\WinRingsHost.exe" --status
 
 # Toggle the Radial Ring overlay
-& "$env:LOCALAPPDATA\WinRings\v3.0.6.0\WinRingsHost.exe" --toggle
+& "$env:LOCALAPPDATA\WinRings\v3.0.7.0\WinRingsHost.exe" --toggle
 
 # Toggle Unified Minimal Top Bar / Media Island
-& "$env:LOCALAPPDATA\WinRings\v3.0.6.0\WinRingsHost.exe" --toggle-topbar
-& "$env:LOCALAPPDATA\WinRings\v3.0.6.0\WinRingsHost.exe" --toggle-media-island
+& "$env:LOCALAPPDATA\WinRings\v3.0.7.0\WinRingsHost.exe" --toggle-topbar
+& "$env:LOCALAPPDATA\WinRings\v3.0.7.0\WinRingsHost.exe" --toggle-media-island
 
 # Open the 5-page Settings & Pins UI (with live 1:1 GPU preview)
-& "$env:LOCALAPPDATA\WinRings\v3.0.6.0\WinRingsHost.exe" --settings
+& "$env:LOCALAPPDATA\WinRings\v3.0.7.0\WinRingsHost.exe" --settings
 
 # Hot-reload %APPDATA%\WinRings\config.json into Explorer
-& "$env:LOCALAPPDATA\WinRings\v3.0.6.0\WinRingsHost.exe" --reload
+& "$env:LOCALAPPDATA\WinRings\v3.0.7.0\WinRingsHost.exe" --reload
 
 # Run the standalone Ring Preview Window (without Explorer injection)
-& "$env:LOCALAPPDATA\WinRings\v3.0.6.0\WinRingsHost.exe" --preview
+& "$env:LOCALAPPDATA\WinRings\v3.0.7.0\WinRingsHost.exe" --preview
 
 # Reset the 3-crash-in-180s safety circuit breaker
-& "$env:LOCALAPPDATA\WinRings\v3.0.6.0\WinRingsHost.exe" --reset-safety
+& "$env:LOCALAPPDATA\WinRings\v3.0.7.0\WinRingsHost.exe" --reset-safety
 
 # Cleanly disarm and exit WinRings
-& "$env:LOCALAPPDATA\WinRings\v3.0.6.0\WinRingsHost.exe" --exit
+& "$env:LOCALAPPDATA\WinRings\v3.0.7.0\WinRingsHost.exe" --exit
 ```
 
 ---
@@ -210,7 +210,7 @@ Run from an **interactive Windows desktop** PowerShell prompt (never from a sand
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\Deploy-WinRings.ps1
 ```
-Cleanly exits old `WinRingsHost.exe`, restarts Medium-IL `explorer.exe` to unload any pinned `WinRingsShell.dll`, enforces Open-Shell `WinKey` neutralization, copies binaries to `%LOCALAPPDATA%\WinRings\v3.0.6.0\`, registers the zero-UAC elevated Scheduled Task `WinRings_Host_Elevated` (pass `-NoAdmin` to stay standard user), updates Startup shortcuts, and starts the new host. Use `-NoLaunch` to stage binaries only.
+Cleanly exits old `WinRingsHost.exe`, restarts Medium-IL `explorer.exe` to unload any pinned `WinRingsShell.dll`, enforces Open-Shell `WinKey` neutralization, copies binaries to `%LOCALAPPDATA%\WinRings\v3.0.7.0\`, registers the zero-UAC elevated Scheduled Task `WinRings_Host_Elevated` (pass `-NoAdmin` to stay standard user), updates Startup shortcuts, and starts the new host. Use `-NoLaunch` to stage binaries only.
 
 ---
 
@@ -218,7 +218,7 @@ Cleanly exits old `WinRingsHost.exe`, restarts Medium-IL `explorer.exe` to unloa
 
 - **[AGENTS.md](AGENTS.md)** — Authoritative engineering rules, target hardware profile, pitfall notes, and AI agent instructions (referenced by [CLAUDE.md](CLAUDE.md) and [.github/copilot-instructions.md](.github/copilot-instructions.md)).
 - **[docs/CUSTOM_FEATURES.md](docs/CUSTOM_FEATURES.md)** — Detailed reference for Top Minimal Bar, FullWorkArea, Media Island, Admin Bridge, 2D Shake / Touchpad / Hot-Corner / Direct-Switch gestures, Drag-to-Snap, and Ring custom features.
-- **[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)** — Obsidian issue log and engineering root-cause fixes shipped in `v3.0.1.0` through `v3.0.6.0`.
+- **[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)** — Obsidian issue log and engineering root-cause fixes shipped in `v3.0.1.0` through `v3.0.7.0`.
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Deep-dive into the core Explorer injection protocol, Direct2D/DirectComposition rendering, and DWM thumbnail pool.
 - **[docs/CONFIGURATION_AND_USAGE.md](docs/CONFIGURATION_AND_USAGE.md)** — Core user guide covering triggers, themes, pins, collections, and drag-and-drop workflows.
 - **[docs/BUILDING_AND_TESTING.md](docs/BUILDING_AND_TESTING.md)** — Build pipeline, verification gates, and troubleshooting with `shell_diag.log`.

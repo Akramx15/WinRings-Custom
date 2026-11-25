@@ -1,6 +1,12 @@
-# WinRings-Custom — Known Issues & Resolutions (`v3.0.6.0`)
+# WinRings-Custom — Known Issues & Resolutions (`v3.0.7.0`)
 
-Record of all issues tracked from Obsidian notes and live user testing across `v3.0.1.0` through `v3.0.6.0`.
+Record of all issues tracked from Obsidian notes and live user testing across `v3.0.1.0` through `v3.0.7.0`.
+
+## Fixed in `v3.0.7.0`
+
+| # | Reported Issue | Root Cause | Resolution in `v3.0.7.0` |
+| :-: | :--- | :--- | :--- |
+| **1** | **Maximized windows (including Admin apps) drop `42 px` below Top Bar after Sleep/Wake until clicked or several seconds later** | On wake/unlock/display-on, Windows 11 momentarily reset `rcWork.top = 42` pushing `IsZoomed` windows down by `42 px`. `FullWorkAreaCtrl` restored `rcWork` with `fWinIni = 0` without resizing pushed maximized windows, UIPI blocked Medium-IL `explorer.exe` from refitting elevated High-IL maximized windows (e.g. Antigravity), `OnWakeOrUnlockImmediate` + `WM_SETTINGCHANGE` burst-counting skipped immediate apply and throttled to `2000 ms`, `GUID_CONSOLE_DISPLAY_STATE` Modern Standby wake was unhandled, and follow-up timers stopped at `+320 ms`. | Added `ComputeMaximizedRefitRect` (`DWMWA_EXTENDED_FRAME_BOUNDS` border compensation) and `FullWorkAreaCtrl::RefitPushedMaximizedWindows` (`SWP_NOZORDER \| SWP_NOACTIVATE \| SWP_FRAMECHANGED \| SWP_ASYNCWINDOWPOS`, zero un-maximize flicker) with `WINRINGS_ADMIN_ACT_REFIT_MAXIMIZED` Host relay for Admin windows; subscribed both `FullWorkAreaCtrl` and `WinRingsHost` to `GUID_CONSOLE_DISPLAY_STATE` Modern Standby display-on events; removed the `WM_SETTINGCHANGE` wake burst self-blocking and `2000 ms` throttle; extended wake follow-ups to `+100 / +300 / +700 / +1400 ms`. |
 
 ## Fixed in `v3.0.6.0`
 

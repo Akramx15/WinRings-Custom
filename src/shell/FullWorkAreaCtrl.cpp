@@ -1,5 +1,11 @@
 #include "FullWorkAreaCtrl.h"
 
+#include <dwmapi.h>
+#include <algorithm>
+#include <cstring>
+
+#include "../shared/ElevationUtil.h"
+#include "../shared/SlotMatching.h"
 #include "ShellController.h"
 
 namespace winrings
@@ -8,6 +14,8 @@ namespace winrings
     {
         constexpr wchar_t kClassName[] = L"WinRings.FullWorkArea.v1";
         constexpr wchar_t kBridgeClass[] = L"Windows.UI.Composition.DesktopWindowContentBridge";
+        constexpr GUID kGuidConsoleDisplayState =
+        { 0x6fe69556u, 0x704au, 0x47a0u, { 0x8fu, 0x24u, 0xc2u, 0x8du, 0x93u, 0x6fu, 0xdau, 0x47u } };
 
         constexpr UINT_PTR kTimerWorkArea = 41;
         constexpr UINT_PTR kTimerTray = 42;
@@ -24,6 +32,37 @@ namespace winrings
             int height = 0;
             HWND firstBridge = nullptr;
         };
+
+        struct RefitEnumCtx
+        {
+            HWND selfHwnd = nullptr;
+            int refitCount = 0;
+            int elevatedCount = 0;
+        };
+
+        bool IsIgnoredRefitClass(const wchar_t* cls) noexcept
+        {
+            if (!cls || !cls[0])
+                return true;
+            if (wcsncmp(cls, L"WinRings.", 9) == 0)
+                return true;
+            static constexpr const wchar_t* kSkipClasses[] = {
+                L"Shell_TrayWnd",
+                L"Shell_SecondaryTrayWnd",
+                L"Progman",
+                L"WorkerW",
+                L"EdgeUiInputTopWndClass",
+                L"ImmersiveLauncher",
+                L"MultitaskingViewFrame",
+                L"Windows.UI.Core.CoreWindow"
+            };
+            for (const wchar_t* skip : kSkipClasses)
+            {
+                if (_wcsicmp(cls, skip) == 0)
+                    return true;
+            }
+            return false;
+        }
     } // namespace
 
     FullWorkAreaCtrl* FullWorkAreaCtrl::s_instance = nullptr;
@@ -66,6 +105,9 @@ namespace winrings
             return false;
 
         m_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+        m_lastDisplayState = 1;
+        m_hDisplayNotify = RegisterPowerSettingNotification(
+            m_hwnd, &kGuidConsoleDisplayState, DEVICE_NOTIFY_WINDOW_HANDLE);
 
         m_enabled = cfg.fullWorkAreaEnabled;
         m_centerMode = cfg.fullWorkAreaPillClip;
@@ -74,7 +116,7 @@ namespace winrings
         if (m_enabled)
         {
             SyncHotkeys(cfg.fullWorkAreaHotkeys);
-            ApplyFullWorkArea();
+            ApplyFullWorkArea(true);
             if (m_centerMode)
                 ApplyCenteredPill();
         }
@@ -130,6 +172,11 @@ namespace winrings
     void FullWorkAreaCtrl::Shutdown()
     {
         SyncHotkeys(false);
+        if (m_hDisplayNotify)
+        {
+            UnregisterPowerSettingNotification(m_hDisplayNotify);
+            m_hDisplayNotify = nullptr;
+        }
         if (m_hwnd)
         {
             KillTimer(m_hwnd, kTimerWorkArea);
@@ -164,6 +211,8 @@ namespace winrings
         m_hTray = nullptr;
         m_lastShift = -1;
         m_lastIsTop = -1;
+        m_lastDisplayState = 1;
+        m_refittingWindows = false;
         m_onPowerOrDisplayResume = nullptr;
     }
 
@@ -173,17 +222,18 @@ namespace winrings
         m_lastIsTop = -1;
         m_trayBurstCount = 0;
         m_workBurstCount = 0;
+        m_workBurstStart = GetTickCount64();
 
         if (!m_enabled)
             return;
 
-        ApplyFullWorkArea();
+        ApplyFullWorkArea(true);
         if (m_centerMode && !m_hidden)
             ApplyCenteredPill();
 
         if (m_hwnd)
         {
-            ScheduleWorkAreaApply(80);
+            SetTimer(m_hwnd, kTimerWorkArea, 120, nullptr);
             if (m_centerMode && !m_hidden)
                 ScheduleTrayApply(60);
         }
@@ -237,7 +287,7 @@ namespace winrings
         return TRUE;
     }
 
-    BOOL CALLBACK FullWorkAreaCtrl::ApplyMonitorProc(HMONITOR hMon, HDC, LPRECT, LPARAM)
+    BOOL CALLBACK FullWorkAreaCtrl::ApplyMonitorProc(HMONITOR hMon, HDC, LPRECT, LPARAM lParam)
     {
         MONITORINFO mi{ sizeof(mi) };
         if (GetMonitorInfoW(hMon, &mi))
@@ -248,10 +298,112 @@ namespace winrings
                 mi.rcWork.bottom != mi.rcMonitor.bottom)
             {
                 RECT rc = mi.rcMonitor;
-                SystemParametersInfoW(SPI_SETWORKAREA, 0, &rc, 0);
+                if (SystemParametersInfoW(SPI_SETWORKAREA, 0, &rc, 0))
+                {
+                    if (lParam)
+                        *reinterpret_cast<BOOL*>(lParam) = TRUE;
+                    ShellDiagLog(L"FullWorkArea",
+                        L"Restored rcWork (%ld,%ld,%ld,%ld) -> (%ld,%ld,%ld,%ld)",
+                        mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom,
+                        mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom);
+                }
             }
         }
         return TRUE;
+    }
+
+    BOOL CALLBACK FullWorkAreaCtrl::RefitMaximizedEnumProc(HWND hwnd, LPARAM lParam)
+    {
+        auto* ctx = reinterpret_cast<RefitEnumCtx*>(lParam);
+        if (!ctx || !hwnd || hwnd == ctx->selfHwnd ||
+            !IsWindowVisible(hwnd) || IsIconic(hwnd) || !IsZoomed(hwnd) ||
+            GetWindow(hwnd, GW_OWNER) != nullptr)
+        {
+            return TRUE;
+        }
+
+        DWORD cloaked = 0;
+        if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0)
+            return TRUE;
+
+        wchar_t cls[96]{};
+        if (GetClassNameW(hwnd, cls, _countof(cls)) <= 0 || IsIgnoredRefitClass(cls))
+            return TRUE;
+
+        HMONITOR hMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{ sizeof(mi) };
+        if (!GetMonitorInfoW(hMon, &mi))
+            return TRUE;
+
+        if (mi.rcWork.left != mi.rcMonitor.left ||
+            mi.rcWork.top != mi.rcMonitor.top ||
+            mi.rcWork.right != mi.rcMonitor.right ||
+            mi.rcWork.bottom != mi.rcMonitor.bottom)
+        {
+            return TRUE;
+        }
+
+        RECT winRc{};
+        if (!GetWindowRect(hwnd, &winRc))
+            return TRUE;
+
+        RECT extRc = winRc;
+        if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &extRc, sizeof(extRc))))
+            extRc = winRc;
+
+        const MaximizedRefitResult refit = ComputeMaximizedRefitRect(
+            static_cast<int>(mi.rcMonitor.left),
+            static_cast<int>(mi.rcMonitor.top),
+            static_cast<int>(mi.rcMonitor.right),
+            static_cast<int>(mi.rcMonitor.bottom),
+            static_cast<int>(extRc.left),
+            static_cast<int>(extRc.top),
+            static_cast<int>(extRc.right),
+            static_cast<int>(extRc.bottom),
+            static_cast<int>(winRc.left),
+            static_cast<int>(winRc.top),
+            static_cast<int>(winRc.right),
+            static_cast<int>(winRc.bottom));
+
+        if (!refit.shouldRefit)
+            return TRUE;
+
+        constexpr UINT kRefitFlags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS;
+        if (IsWindowElevated(hwnd))
+        {
+            if (ShellController::RequestHostWindowAction(
+                    WINRINGS_ADMIN_ACT_REFIT_MAXIMIZED, hwnd, 0,
+                    refit.left, refit.top, refit.width, refit.height, kRefitFlags))
+            {
+                ++ctx->refitCount;
+                ++ctx->elevatedCount;
+            }
+        }
+        else
+        {
+            PostMessageW(hwnd, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
+            if (SetWindowPos(hwnd, nullptr, refit.left, refit.top, refit.width, refit.height, kRefitFlags))
+                ++ctx->refitCount;
+        }
+        return TRUE;
+    }
+
+    void FullWorkAreaCtrl::RefitPushedMaximizedWindows()
+    {
+        if (!m_enabled || m_refittingWindows)
+            return;
+
+        m_refittingWindows = true;
+        RefitEnumCtx ctx{};
+        ctx.selfHwnd = m_hwnd;
+        EnumWindows(RefitMaximizedEnumProc, reinterpret_cast<LPARAM>(&ctx));
+        m_refittingWindows = false;
+
+        if (ctx.refitCount > 0)
+        {
+            ShellDiagLog(L"FullWorkArea", L"Refit %d pushed maximized window(s) (elevated=%d)",
+                ctx.refitCount, ctx.elevatedCount);
+        }
     }
 
     bool FullWorkAreaCtrl::AnyMonitorNeedsFix() const
@@ -261,13 +413,17 @@ namespace winrings
         return needs != FALSE;
     }
 
-    void FullWorkAreaCtrl::ApplyFullWorkArea()
+    void FullWorkAreaCtrl::ApplyFullWorkArea(bool forceRefitMaximized)
     {
         if (m_applyingWork)
             return;
         m_applyingWork = true;
-        EnumDisplayMonitors(nullptr, nullptr, ApplyMonitorProc, 0);
+        BOOL anyFixed = FALSE;
+        EnumDisplayMonitors(nullptr, nullptr, ApplyMonitorProc, reinterpret_cast<LPARAM>(&anyFixed));
         m_applyingWork = false;
+
+        if (anyFixed || forceRefitMaximized)
+            RefitPushedMaximizedWindows();
     }
 
     void FullWorkAreaCtrl::RestoreDefaultWorkArea()
@@ -432,14 +588,14 @@ namespace winrings
         if (!m_hwnd)
             return;
         const ULONGLONG now = GetTickCount64();
-        if ((now - m_workBurstStart) > 3000)
+        if ((now - m_workBurstStart) > 2000)
         {
             m_workBurstStart = now;
             m_workBurstCount = 0;
         }
         ++m_workBurstCount;
-        if (m_workBurstCount > 5)
-            delayMs = 2000;
+        if (m_workBurstCount > 12)
+            delayMs = (std::max)(delayMs, 250u);
         SetTimer(m_hwnd, kTimerWorkArea, delayMs, nullptr);
     }
 
@@ -610,8 +766,7 @@ namespace winrings
             if (wp == kTimerWorkArea)
             {
                 KillTimer(hwnd, kTimerWorkArea);
-                if (AnyMonitorNeedsFix())
-                    ApplyFullWorkArea();
+                ApplyFullWorkArea(true);
                 return 0;
             }
             if (wp == kTimerTray)
@@ -633,9 +788,22 @@ namespace winrings
         {
             if (!m_applyingWork && wp == SPI_SETWORKAREA && AnyMonitorNeedsFix())
             {
-                if (m_workBurstCount == 0)
-                    ApplyFullWorkArea();
-                ScheduleWorkAreaApply(60);
+                const ULONGLONG now = GetTickCount64();
+                if ((now - m_workBurstStart) > 2000)
+                {
+                    m_workBurstStart = now;
+                    m_workBurstCount = 0;
+                }
+                ++m_workBurstCount;
+                if (m_workBurstCount <= 12)
+                {
+                    ApplyFullWorkArea(true);
+                    SetTimer(hwnd, kTimerWorkArea, 100, nullptr);
+                }
+                else
+                {
+                    SetTimer(hwnd, kTimerWorkArea, 250, nullptr);
+                }
             }
             return 0;
         }
@@ -655,6 +823,24 @@ namespace winrings
                 OnWakeOrUnlockImmediate();
                 if (m_onPowerOrDisplayResume)
                     m_onPowerOrDisplayResume();
+            }
+            else if (wp == PBT_POWERSETTINGCHANGE && lp != 0)
+            {
+                const auto* pbs = reinterpret_cast<const POWERBROADCAST_SETTING*>(lp);
+                if (pbs->DataLength >= sizeof(DWORD) &&
+                    std::memcmp(&pbs->PowerSetting, &kGuidConsoleDisplayState, sizeof(GUID)) == 0)
+                {
+                    DWORD displayState = 1;
+                    std::memcpy(&displayState, pbs->Data, sizeof(displayState));
+                    const DWORD prevState = m_lastDisplayState;
+                    m_lastDisplayState = displayState;
+                    if (displayState == 1 && prevState != 1)
+                    {
+                        OnWakeOrUnlockImmediate();
+                        if (m_onPowerOrDisplayResume)
+                            m_onPowerOrDisplayResume();
+                    }
+                }
             }
             return TRUE;
         }

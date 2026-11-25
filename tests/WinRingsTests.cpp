@@ -899,6 +899,66 @@ static void TestAdminBridgeDecisionAndPayload()
     static_assert(sizeof(WinRingsAdminWindowActionPayload) % 8 == 0, "Payload must stay 8-byte aligned");
 }
 
+static void TestMaximizedRefitGeometry()
+{
+    // Already covering full monitor -> no refit.
+    const auto fullOk = ComputeMaximizedRefitRect(
+        0, 0, 1920, 1200,
+        0, 0, 1920, 1200,
+        -11, -11, 1931, 1211);
+    CHECK(!fullOk.shouldRefit);
+
+    // Pushed down by 42 px top bar with 11 px DWM resize borders -> refit back to y=0 with preserved borders.
+    const auto pushedTopDwm = ComputeMaximizedRefitRect(
+        0, 0, 1920, 1200,
+        0, 42, 1920, 1200,
+        -11, 31, 1931, 1211);
+    CHECK(pushedTopDwm.shouldRefit);
+    CHECK(pushedTopDwm.left == -11 && pushedTopDwm.top == -11 &&
+        pushedTopDwm.width == 1942 && pushedTopDwm.height == 1222);
+
+    // Borderless window pushed down by 42 px top bar -> refit exact monitor bounds.
+    const auto pushedTopFlat = ComputeMaximizedRefitRect(
+        0, 0, 1920, 1200,
+        0, 42, 1920, 1200,
+        0, 42, 1920, 1200);
+    CHECK(pushedTopFlat.shouldRefit);
+    CHECK(pushedTopFlat.left == 0 && pushedTopFlat.top == 0 &&
+        pushedTopFlat.width == 1920 && pushedTopFlat.height == 1200);
+
+    // Bottom taskbar gap (48 px at bottom of 1280x800) with 8 px DWM frame borders.
+    const auto pushedBottom = ComputeMaximizedRefitRect(
+        0, 0, 1280, 800,
+        0, 0, 1280, 752,
+        -8, -8, 1288, 760);
+    CHECK(pushedBottom.shouldRefit);
+    CHECK(pushedBottom.left == -8 && pushedBottom.top == -8 &&
+        pushedBottom.width == 1296 && pushedBottom.height == 816);
+
+    // Custom fixed-max-size window (> 128 px short of monitor edge) must NOT be forced full monitor.
+    const auto fixedMax = ComputeMaximizedRefitRect(
+        0, 0, 1920, 1200,
+        0, 42, 1400, 1200,
+        0, 42, 1400, 1200);
+    CHECK(!fixedMax.shouldRefit);
+
+    // Tiny spurious window (< half monitor dimensions) must be ignored.
+    const auto tinyWin = ComputeMaximizedRefitRect(
+        0, 0, 1920, 1200,
+        0, 42, 400, 300,
+        0, 42, 400, 300);
+    CHECK(!tinyWin.shouldRefit);
+
+    // Secondary monitor with negative X coordinates.
+    const auto secMon = ComputeMaximizedRefitRect(
+        -1920, 0, 0, 1080,
+        -1920, 42, 0, 1080,
+        -1928, 34, 8, 1088);
+    CHECK(secMon.shouldRefit);
+    CHECK(secMon.left == -1928 && secMon.top == -8 &&
+        secMon.width == 1936 && secMon.height == 1096);
+}
+
 int wmain()
 {
     TestRadialMath();
@@ -913,6 +973,7 @@ int wmain()
     TestSnapEdgeClassification();
     TestTopBarClampAndSearchPin();
     TestAdminBridgeDecisionAndPayload();
+    TestMaximizedRefitGeometry();
 
     if (g_failures == 0)
     {

@@ -34,6 +34,7 @@ namespace winrings
 
         static BOOL CALLBACK CheckMonitorProc(HMONITOR hMon, HDC hdc, LPRECT lprc, LPARAM lParam);
         static BOOL CALLBACK ApplyMonitorProc(HMONITOR hMon, HDC hdc, LPRECT lprc, LPARAM lParam);
+        static BOOL CALLBACK RefitMaximizedEnumProc(HWND hwnd, LPARAM lParam);
         static BOOL CALLBACK MoveBridgeProc(HWND child, LPARAM lParam);
         static BOOL CALLBACK FindBridgeProc(HWND child, LPARAM lParam);
         static void CALLBACK TrayWinEventProc(
@@ -41,7 +42,8 @@ namespace winrings
             LONG idObject, LONG idChild, DWORD dwEventThread, DWORD dwmsEventTime);
 
         bool AnyMonitorNeedsFix() const;
-        void ApplyFullWorkArea();
+        void ApplyFullWorkArea(bool forceRefitMaximized = false);
+        void RefitPushedMaximizedWindows();
         void RestoreDefaultWorkArea();
 
         void SyncHotkeys(bool enable);
@@ -60,6 +62,8 @@ namespace winrings
         HWND m_hwnd = nullptr;
         bool m_classRegistered = false;
         UINT m_msgTaskbarCreated = 0;
+        HPOWERNOTIFY m_hDisplayNotify = nullptr;
+        DWORD m_lastDisplayState = 1;
 
         SwitcherConfig m_config;
         std::function<void()> m_onVisibilityChanged;
@@ -71,6 +75,7 @@ namespace winrings
         bool m_hotkeysActive = false;
 
         bool m_applyingWork = false;
+        bool m_refittingWindows = false;
         ULONGLONG m_workBurstStart = 0;
         DWORD m_workBurstCount = 0;
 

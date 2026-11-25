@@ -255,4 +255,56 @@ namespace winrings
 
         return res;
     }
+
+    struct MaximizedRefitResult
+    {
+        bool shouldRefit = false;
+        int left = 0;
+        int top = 0;
+        int width = 0;
+        int height = 0;
+    };
+
+    inline MaximizedRefitResult ComputeMaximizedRefitRect(
+        int monLeft, int monTop, int monRight, int monBottom,
+        int extLeft, int extTop, int extRight, int extBottom,
+        int winLeft, int winTop, int winRight, int winBottom,
+        int minGapPx = 4,
+        int maxTaskbarBandPx = 128) noexcept
+    {
+        const int monW = monRight - monLeft;
+        const int monH = monBottom - monTop;
+        const int extW = extRight - extLeft;
+        const int extH = extBottom - extTop;
+        if (monW <= 0 || monH <= 0 || extW < monW / 2 || extH < monH / 2)
+            return {};
+
+        const int gapL = extLeft - monLeft;
+        const int gapT = extTop - monTop;
+        const int gapR = monRight - extRight;
+        const int gapB = monBottom - extBottom;
+        if (gapL > maxTaskbarBandPx || gapT > maxTaskbarBandPx ||
+            gapR > maxTaskbarBandPx || gapB > maxTaskbarBandPx)
+        {
+            return {};
+        }
+
+        const bool anyGap = (gapL > minGapPx) || (gapT > minGapPx) ||
+            (gapR > minGapPx) || (gapB > minGapPx);
+        if (!anyGap)
+            return {};
+
+        const int padL = (std::clamp)(extLeft - winLeft, 0, 32);
+        const int padT = (std::clamp)(extTop - winTop, 0, 32);
+        const int padR = (std::clamp)(winRight - extRight, 0, 32);
+        const int padB = (std::clamp)(winBottom - extBottom, 0, 32);
+
+        return MaximizedRefitResult{
+            true,
+            monLeft - padL,
+            monTop - padT,
+            monW + padL + padR,
+            monH + padT + padB
+        };
+    }
 } // namespace winrings

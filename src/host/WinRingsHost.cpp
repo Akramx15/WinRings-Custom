@@ -59,6 +59,9 @@ namespace
     using WTSRegisterSessionNotificationFn = BOOL (WINAPI*)(HWND, DWORD);
     using WTSUnregisterSessionNotificationFn = BOOL (WINAPI*)(HWND);
 
+    constexpr GUID kGuidConsoleDisplayState =
+    { 0x6fe69556u, 0x704au, 0x47a0u, { 0x8fu, 0x24u, 0xc2u, 0x8du, 0x93u, 0x6fu, 0xdau, 0x47u } };
+
     class UniqueHandle
     {
     public:
@@ -146,6 +149,8 @@ namespace
         WTSRegisterSessionNotificationFn registerSessionNotification = nullptr;
         WTSUnregisterSessionNotificationFn unregisterSessionNotification = nullptr;
         bool sessionNotificationRegistered = false;
+        HPOWERNOTIFY displayPowerNotify = nullptr;
+        DWORD lastDisplayState = 1;
         UINT_PTR attemptCookie = 0;
         bool trayAdded = false;
         HICON trayIcon = nullptr;
@@ -479,6 +484,12 @@ namespace
 
     bool RegisterSessionNotifications()
     {
+        if (g_runtime.window && !g_runtime.displayPowerNotify)
+        {
+            g_runtime.lastDisplayState = 1;
+            g_runtime.displayPowerNotify = RegisterPowerSettingNotification(
+                g_runtime.window, &kGuidConsoleDisplayState, DEVICE_NOTIFY_WINDOW_HANDLE);
+        }
         g_runtime.wtsApi = LoadLibraryExW(L"wtsapi32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!g_runtime.wtsApi)
             return false;
@@ -501,6 +512,11 @@ namespace
 
     void UnregisterSessionNotifications()
     {
+        if (g_runtime.displayPowerNotify)
+        {
+            UnregisterPowerSettingNotification(g_runtime.displayPowerNotify);
+            g_runtime.displayPowerNotify = nullptr;
+        }
         if (g_runtime.sessionNotificationRegistered && g_runtime.unregisterSessionNotification && g_runtime.window)
             g_runtime.unregisterSessionNotification(g_runtime.window);
         g_runtime.sessionNotificationRegistered = false;
@@ -1196,6 +1212,16 @@ namespace
             if (!target || !IsWindow(target))
                 return false;
             return ShowWindow(target, SW_RESTORE) != FALSE;
+
+        case WINRINGS_ADMIN_ACT_REFIT_MAXIMIZED:
+            if (!target || !IsWindow(target) || !IsZoomed(target))
+                return false;
+            PostMessageW(target, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
+            return SetWindowPos(
+                target,
+                nullptr,
+                payload.x, payload.y, payload.cx, payload.cy,
+                payload.swpFlags | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS) != FALSE;
 
         default:
             return false;
@@ -2031,6 +2057,32 @@ namespace
             {
                 g_runtime.powerInputInteractive = true;
                 AdvanceInteractiveInputGeneration();
+            }
+            else if (wParam == PBT_POWERSETTINGCHANGE && lParam != 0)
+            {
+                const auto* pbs = reinterpret_cast<const POWERBROADCAST_SETTING*>(lParam);
+                if (pbs->DataLength >= sizeof(DWORD) &&
+                    std::memcmp(&pbs->PowerSetting, &kGuidConsoleDisplayState, sizeof(GUID)) == 0)
+                {
+                    DWORD displayState = 1;
+                    std::memcpy(&displayState, pbs->Data, sizeof(displayState));
+                    const DWORD prevState = g_runtime.lastDisplayState;
+                    g_runtime.lastDisplayState = displayState;
+                    if (displayState == 1 && prevState != 1)
+                    {
+                        if (g_runtime.adminBridgeArmed)
+                        {
+                            g_runtime.adminInput.ResetTransientState();
+                            g_runtime.adminGestures.EnsureDeviceRegistration(true);
+                        }
+                        if (g_runtime.status == WINRINGS_HOST_STATUS_READY &&
+                            g_runtime.activationCommitted &&
+                            g_runtime.interactiveInput)
+                        {
+                            SendShellCommand(WINRINGS_CMD_REFRESH_INPUT);
+                        }
+                    }
+                }
             }
             return TRUE;
 

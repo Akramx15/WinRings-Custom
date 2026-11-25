@@ -18,7 +18,7 @@ $identityText = Get-Content -LiteralPath $identityPath -Raw -Encoding UTF8
 if ($identityText -match 'WINRINGS_PRODUCT_VERSION_STR_W\s+L"([^"]+)"') {
     $version = $Matches[1]
 } else {
-    $version = '3.0.6.0'
+    $version = '3.0.7.0'
 }
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
