@@ -267,6 +267,12 @@ namespace winrings
         if (injected && kb->dwExtraInfo == kWinRingsInjectedTag)
             return CallNextHookEx(m_keyboardHook, code, wp, lp);
 
+        if (m_callbacks.shouldProcessInput && !m_directSwitchActive && !m_winKeyDown && !m_triggerHeld &&
+            !m_callbacks.shouldProcessInput(POINT{}, true))
+        {
+            return CallNextHookEx(m_keyboardHook, code, wp, lp);
+        }
+
         const bool isDown = (wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN);
         const bool isUp = (wp == WM_KEYUP || wp == WM_SYSKEYUP);
         const bool ringOpen = m_callbacks.isRingOpen && m_callbacks.isRingOpen();
@@ -494,6 +500,14 @@ namespace winrings
             m_callbacks.shouldSuppressTouchpadMouse && m_callbacks.shouldSuppressTouchpadMouse(msg))
         {
             return 1;
+        }
+
+        if (m_callbacks.shouldProcessInput && !m_triggerHeld && !m_chordActive &&
+            !m_callbacks.shouldProcessInput(ms->pt, false))
+        {
+            if (msg == WM_MOUSEMOVE)
+                ResetShakeState();
+            return CallNextHookEx(m_mouseHook, code, wp, lp);
         }
 
         if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN)

@@ -1,6 +1,12 @@
-# WinRings-Custom — Known Issues & Resolutions (`v3.0.5.0`)
+# WinRings-Custom — Known Issues & Resolutions (`v3.0.6.0`)
 
-Record of all issues tracked from Obsidian notes and live user testing across `v3.0.1.0` through `v3.0.5.0`.
+Record of all issues tracked from Obsidian notes and live user testing across `v3.0.1.0` through `v3.0.6.0`.
+
+## Fixed in `v3.0.6.0`
+
+| # | Reported Issue | Root Cause | Resolution in `v3.0.6.0` |
+| :-: | :--- | :--- | :--- |
+| **1** | **WinRings does not trigger or manipulate windows when focused/hovering over Administrator (`High-IL`) apps** | Windows UIPI blocks Medium-IL `explorer.exe` (`WinRingsShell.dll`) from receiving `WH_KEYBOARD_LL`/`WH_MOUSE_LL`/`WM_INPUT` or sending `SetWindowPos`/`ShowWindow`/`WM_CLOSE`/`TerminateProcess` when an elevated app (e.g., Run-as-Admin IDE or browser launched from it) holds focus. | Added the elevated `WinRingsHost.exe` **Admin Input & Window Action Bridge** (`ElevationUtil.h`, selective `InputEngine`/`GestureEngine` activation when elevated windows block Medium-IL hooks, `RingOverlay::OpenAt` foreground claim over elevated windows, authenticated `WINRINGS_COPYDATA_WINDOW_ACTION` relay for Activate/Minimize/Close/End Task/Drag-Snap in `WindowTracker` & `WindowSnapCtrl`, and zero-UAC `WinRings_Host_Elevated` Scheduled Task in `Deploy-WinRings.ps1`). |
 
 ## Fixed in `v3.0.5.0`
 

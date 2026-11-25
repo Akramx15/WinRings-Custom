@@ -6,10 +6,12 @@
 
 #include "../src/shared/ClockFormat.h"
 #include "../src/shared/CrashGuard.h"
+#include "../src/shared/ElevationUtil.h"
 #include "../src/shared/RadialMath.h"
 #include "../src/shared/RingThemeEngine.h"
 #include "../src/shared/SearchMatch.h"
 #include "../src/shared/SlotMatching.h"
+#include "../src/shared/WinRingsApi.h"
 #include "../src/shared/WinRingsConfig.h"
 
 using namespace winrings;
@@ -874,6 +876,29 @@ static void TestTopBarClampAndSearchPin()
         L"") == -1);
 }
 
+static void TestAdminBridgeDecisionAndPayload()
+{
+    // Disabled when host not elevated, shell not ready, non-interactive (lock/UAC), or overlay already open.
+    CHECK(!ShouldAdminBridgeInterceptInput(false, true, true, false, true, true, false));
+    CHECK(!ShouldAdminBridgeInterceptInput(true, false, true, false, true, true, false));
+    CHECK(!ShouldAdminBridgeInterceptInput(true, true, false, false, true, true, false));
+    CHECK(!ShouldAdminBridgeInterceptInput(true, true, true, true, true, true, false));
+
+    // When elevated foreground window has focus, intercept keyboard/RawInput and mouse so triggers/shakes/wheels work.
+    CHECK(ShouldAdminBridgeInterceptInput(true, true, true, false, true, false, true));
+    CHECK(ShouldAdminBridgeInterceptInput(true, true, true, false, true, false, false));
+
+    // When medium foreground has focus, never duplicate RawInput/keyboard in Host; only intercept mouse over elevated cursor window.
+    CHECK(!ShouldAdminBridgeInterceptInput(true, true, true, false, false, true, true));
+    CHECK(ShouldAdminBridgeInterceptInput(true, true, true, false, false, true, false));
+    CHECK(!ShouldAdminBridgeInterceptInput(true, true, true, false, false, false, false));
+
+    CHECK(!IsProcessElevated(0));
+    CHECK(!IsWindowElevated(nullptr));
+    static_assert(sizeof(WinRingsAdminWindowActionPayload) == 48, "Unexpected payload size");
+    static_assert(sizeof(WinRingsAdminWindowActionPayload) % 8 == 0, "Payload must stay 8-byte aligned");
+}
+
 int wmain()
 {
     TestRadialMath();
@@ -887,6 +912,7 @@ int wmain()
     TestDragSpringAndReorder();
     TestSnapEdgeClassification();
     TestTopBarClampAndSearchPin();
+    TestAdminBridgeDecisionAndPayload();
 
     if (g_failures == 0)
     {

@@ -6,7 +6,7 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
 
 ## 1. Repository Identity & Upstream Lineage
 
-- **Fork (`origin`):** `https://github.com/Akramx15/WinRings-Custom` (`main` branch, currently **`v3.0.5.0`**)
+- **Fork (`origin`):** `https://github.com/Akramx15/WinRings-Custom` (`main` branch, currently **`v3.0.6.0`**)
 - **Upstream (`upstream`):** `https://github.com/AhmadotEng/WinRings` (synced from release tag **`v3.0.0`**, commit `df4012a`)
 - **Pre-Upgrade Backup Branch:** `v2.0.1-custom-backup` (`8cf2b11`) — historical reference for the v2 custom fork before the v3 upgrade.
 
@@ -30,7 +30,7 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
 
 | Binary | Role |
 | :--- | :--- |
-| **`WinRingsHost.exe`** | Resident tray supervisor, host-safety circuit breaker (3 Explorer crashes in 180s), Explorer injector, CLI (`--status`, `--toggle`, `--toggle-topbar`, `--toggle-media-island`, `--settings`, `--reload`, `--preview`, `--reset-safety`, `--exit`). |
+| **`WinRingsHost.exe`** | Resident elevated Admin Input & Window Action Bridge (`WinRings_Host_Elevated` zero-UAC task, hosts `InputEngine` + `GestureEngine` when elevated windows block Medium-IL `explorer.exe` hooks and executes cross-IL `WM_COPYDATA` window actions), crash-loop circuit breaker, Explorer injector, CLI (`--status`, `--toggle`, `--toggle-topbar`, `--toggle-media-island`, `--settings`, `--reload`, `--preview`, `--reset-safety`, `--exit`). |
 | **`WinRingsShell.dll`** | In-process `explorer.exe` DLL hosting the radial switcher and all unified shell features (`ShellController.cpp`). Exported entry points: `WinRings_GetApi`, `WinRings_RunPreview`, `DllGetClassObject`, `DllCanUnloadNow`. |
 | **`WinRingsTools.exe`** | Dark-mode Win32 + Direct2D 1.1 5-page Settings GUI (`1040x760`) with live 1:1 GPU preview. |
 
@@ -51,6 +51,7 @@ This file is the **single source of truth** for any AI coding assistant (Codex, 
    - GNOME-style hot-corner velocity/pressure flick
    - Drag-to-Snap / Split-Screen (`WindowSnapCtrl`) from Ring icons (`Tear-off` for pinned, immediate drag for unpinned) and Window Cards: lightweight decoupled ~60Hz `SWP_ASYNCWINDOWPOS` live window tracking + Fluent edge ghost preview, deferred zero-swallowed `WM_LBUTTONUP` release, DWM border-compensated **Direct Snap** (`ApplyDirectSnap`, default `dragToSnapUseSnapAssist = false` for immediate foreground focus without Snap Assist click theft) or optional `Win+Arrow` Snap Assist (`dragToSnapUseSnapAssist = true`), plus optional closed pinned app launch & event-driven snap.
    - Ring window card `X` close button, right-click `Run as Administrator` & `End Task`, **Search Arc (`m_searchArcActive`) right-click menu** (`Open`, `Run as Administrator`, `Open File Location` with `.lnk` target / UWP package resolution, and `Pin to Ring` / `Unpin from Ring`), `Toggle Top Minimal Bar` & `Show Media Island` toggles, `SelectionIndicatorStyle` (`GlowOnly`, `SectorWedge`, `PointerLine`), and `disableRingBlur` performance mode.
+   - **Elevated / Admin Window Support (`src/shared/ElevationUtil.h` + `WinRingsHost.cpp`):** Keeps `explorer.exe` Medium-IL while registering `WinRings_Host_Elevated` (`RunLevel = Highest`) at logon with zero UAC prompts (`WinRingsHost.manifest` remains `asInvoker` for CLI calls). When an elevated window holds focus or lies under the cursor while the Ring is closed, elevated `WinRingsHost.exe` captures `WH_MOUSE_LL`/`WH_KEYBOARD_LL`/`WM_INPUT` via `ShouldAdminBridgeInterceptInput` and commands `ShellController` via `AllowSetForegroundWindow`; `RingOverlay::OpenAt` claims foreground focus when opened over an elevated window so typing/clicking inside the Ring works natively; `WindowTracker` & `WindowSnapCtrl` relay Activate/Minimize/Close/End Task/Drag-to-Snap operations on elevated windows via authenticated `WM_COPYDATA` (`WINRINGS_COPYDATA_WINDOW_ACTION`).
 
 ---
 

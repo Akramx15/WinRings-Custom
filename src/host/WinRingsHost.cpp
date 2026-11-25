@@ -13,13 +13,17 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <string>
 #include <vector>
 
 #include "../shared/CrashGuard.h"
+#include "../shared/ElevationUtil.h"
 #include "../shared/WinRingsApi.h"
 #include "../shared/WinRingsConfig.h"
+#include "../shell/GestureEngine.h"
+#include "../shell/InputEngine.h"
 
 using namespace winrings;
 
@@ -29,11 +33,14 @@ namespace
     constexpr UINT_PTR kInjectionTimer = 2;
     constexpr UINT_PTR kStopTimer = 3;
     constexpr UINT_PTR kTrayRetryTimer = 4;
+    constexpr UINT_PTR kAdminWatchdogTimer = 5;
+    constexpr UINT_PTR kAdminConfigSyncTimer = 6;
     constexpr DWORD kInjectionTimeoutMs = 6000;
     constexpr DWORD kStopTimeoutMs = 5500;
     constexpr DWORD kRetryDelayMs[] = { 100, 250, 500, 1000, 2000, 4000, 4000 };
 
     constexpr UINT kTrayCallbackMsg = WM_APP + 100;
+    constexpr UINT kMsgAdminShakeTriggered = WM_APP + 101;
     constexpr UINT kTrayIconId = 1;
     constexpr UINT kMenuCmdOpenRing = 1001;
     constexpr UINT kMenuCmdToggleTopBar = 1002;
@@ -143,6 +150,12 @@ namespace
         bool trayAdded = false;
         HICON trayIcon = nullptr;
         unsigned trayRetryCount = 0;
+        bool isElevated = false;
+        bool adminBridgeArmed = false;
+        SwitcherConfig config;
+        InputEngine adminInput;
+        GestureEngine adminGestures;
+        POINT pendingAdminShakePt{};
     };
 
     HostRuntime g_runtime;
@@ -194,6 +207,95 @@ namespace
             CloseHandle(file);
         }
         catch (...) {}
+    }
+
+    double QueryHostPrimaryDpiScale() noexcept
+    {
+        using GetDpiForMonFn = HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*);
+        static GetDpiForMonFn pGetDpiForMon = []() -> GetDpiForMonFn {
+            HMODULE shcore = LoadLibraryExW(L"shcore.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+            return shcore ? reinterpret_cast<GetDpiForMonFn>(GetProcAddress(shcore, "GetDpiForMonitor")) : nullptr;
+        }();
+        if (pGetDpiForMon)
+        {
+            const POINT zero{ 0, 0 };
+            HMONITOR mon = MonitorFromPoint(zero, MONITOR_DEFAULTTOPRIMARY);
+            UINT dx = 96, dy = 96;
+            if (SUCCEEDED(pGetDpiForMon(mon, 0, &dx, &dy)) && dx >= 72)
+                return static_cast<double>(dx) / 96.0;
+        }
+        return 1.0;
+    }
+
+    void ForceForegroundElevated(HWND target) noexcept
+    {
+        if (!target || !IsWindow(target))
+            return;
+        if (!SetForegroundWindow(target))
+        {
+            HWND fg = GetForegroundWindow();
+            const DWORD curTid = GetCurrentThreadId();
+            const DWORD fgTid = fg ? GetWindowThreadProcessId(fg, nullptr) : 0;
+            const DWORD tgtTid = GetWindowThreadProcessId(target, nullptr);
+            const bool attFg = fgTid && fgTid != curTid && AttachThreadInput(curTid, fgTid, TRUE) != FALSE;
+            const bool attTgt = tgtTid && tgtTid != curTid && tgtTid != fgTid && AttachThreadInput(curTid, tgtTid, TRUE) != FALSE;
+            BringWindowToTop(target);
+            SetForegroundWindow(target);
+            if (attTgt) AttachThreadInput(curTid, tgtTid, FALSE);
+            if (attFg) AttachThreadInput(curTid, fgTid, FALSE);
+        }
+    }
+
+    bool IsOverlayWindowVisible() noexcept
+    {
+        HWND overlay = FindWindowW(WINRINGS_OVERLAY_CLASS_W, nullptr);
+        return overlay && IsWindowVisible(overlay) != FALSE;
+    }
+
+    bool IsPointOverMediaIslandBar(POINT pt) noexcept
+    {
+        if (!g_runtime.config.mediaIslandEnabled || !g_runtime.config.mediaIslandScrollVolume)
+            return false;
+        HWND island = FindWindowW(L"WinRings.MediaIsland.v1", nullptr);
+        if (!island || !IsWindowVisible(island))
+            return false;
+        RECT rc{};
+        if (!GetWindowRect(island, &rc))
+            return false;
+
+        HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{ sizeof(mi) };
+        LONG hitTop = rc.top;
+        LONG hitBottom = rc.bottom;
+        if (GetMonitorInfoW(mon, &mi))
+        {
+            const double scale = QueryHostPrimaryDpiScale();
+            const int barDip = (std::clamp)(g_runtime.config.topBarHeightDip, 24, 48);
+            const int barPx = static_cast<int>(std::lround(static_cast<double>(barDip) * scale));
+            hitTop = (std::min)(rc.top, mi.rcMonitor.top);
+            hitBottom = (std::max)(rc.bottom, mi.rcMonitor.top + barPx);
+        }
+        return pt.x >= rc.left && pt.x <= rc.right &&
+            pt.y >= hitTop && pt.y <= hitBottom;
+    }
+
+    bool ShouldAdminBridgeHandle(POINT pt, bool isKeyboardOrRaw) noexcept
+    {
+        const bool shellReady = (g_runtime.status == WINRINGS_HOST_STATUS_READY);
+        if (!g_runtime.isElevated || !shellReady || !g_runtime.interactiveInput)
+            return false;
+        if (IsOverlayWindowVisible())
+            return false;
+        const bool fgElev = IsWindowElevated(GetForegroundWindow());
+        const bool cursorElev = isKeyboardOrRaw ? false : IsWindowElevated(WindowFromPoint(pt));
+        return ShouldAdminBridgeInterceptInput(
+            g_runtime.isElevated,
+            shellReady,
+            g_runtime.interactiveInput,
+            false,
+            fgElev,
+            cursorElev,
+            isKeyboardOrRaw);
     }
 
     ULONGLONG CurrentUtcFileTime()
@@ -841,8 +943,11 @@ namespace
         KillTimer(g_runtime.window, kInjectionTimer);
     }
 
+    void DisarmAdminInputBridge();
+
     bool ResetConnection()
     {
+        DisarmAdminInputBridge();
         CancelTimers();
         g_runtime.shellControlWindow = nullptr;
         g_runtime.explorer.clear();
@@ -880,6 +985,221 @@ namespace
         }
         return PostMessageW(g_runtime.shellControlWindow, g_runtime.shellCommandMessage,
             static_cast<WPARAM>(cmd), 0) != FALSE;
+    }
+
+    LPARAM PackPointLParam(POINT pt) noexcept
+    {
+        return MAKELPARAM(
+            static_cast<WORD>(static_cast<short>(pt.x)),
+            static_cast<WORD>(static_cast<short>(pt.y)));
+    }
+
+    bool SendShellAdminCommand(WinRingsCommand cmd, LPARAM lp = 0) noexcept
+    {
+        if (g_runtime.status != WINRINGS_HOST_STATUS_READY || !ExplorerProcessStillAlive())
+            return false;
+        if ((!g_runtime.shellControlWindow || !IsWindow(g_runtime.shellControlWindow)) &&
+            g_runtime.explorer.processId)
+        {
+            g_runtime.shellControlWindow = FindShellControlWindow(g_runtime.explorer.processId);
+        }
+        if (!g_runtime.shellControlWindow || !IsWindow(g_runtime.shellControlWindow))
+            return false;
+        if (g_runtime.explorer.processId)
+            AllowSetForegroundWindow(g_runtime.explorer.processId);
+        return PostMessageW(g_runtime.shellControlWindow, g_runtime.shellCommandMessage,
+            static_cast<WPARAM>(cmd), lp) != FALSE;
+    }
+
+    void DisarmAdminInputBridge()
+    {
+        if (g_runtime.window && IsWindow(g_runtime.window))
+        {
+            KillTimer(g_runtime.window, kAdminWatchdogTimer);
+            KillTimer(g_runtime.window, kAdminConfigSyncTimer);
+        }
+        if (g_runtime.adminBridgeArmed)
+        {
+            g_runtime.adminInput.Uninstall();
+            g_runtime.adminGestures.Shutdown();
+            g_runtime.adminBridgeArmed = false;
+            HostDiagLog(L"AdminInputBridge disarmed");
+        }
+    }
+
+    void ReloadAdminBridgeConfig()
+    {
+        if (!g_runtime.isElevated || !g_runtime.adminBridgeArmed)
+            return;
+        g_runtime.config = SwitcherConfig::LoadOrCreate();
+        g_runtime.adminInput.UpdateConfig(g_runtime.config);
+        g_runtime.adminInput.UpdateCachedDpiScale(QueryHostPrimaryDpiScale());
+        g_runtime.adminGestures.UpdateConfig(g_runtime.config);
+    }
+
+    void ArmAdminInputBridge()
+    {
+        if (!g_runtime.isElevated || g_runtime.status != WINRINGS_HOST_STATUS_READY || !g_runtime.window)
+            return;
+
+        if (g_runtime.adminBridgeArmed)
+        {
+            ReloadAdminBridgeConfig();
+            return;
+        }
+
+        g_runtime.config = SwitcherConfig::LoadOrCreate();
+
+        GestureEngine::Callbacks gCb{};
+        gCb.isRingOpen = []() { return IsOverlayWindowVisible(); };
+        gCb.onToggleRing = []() { SendShellAdminCommand(WINRINGS_CMD_ADMIN_TOGGLE_RING); };
+        gCb.onOpenRing = []() {
+            POINT pt{};
+            GetCursorPos(&pt);
+            SendShellAdminCommand(WINRINGS_CMD_OPEN_RING_AT, PackPointLParam(pt));
+        };
+        gCb.isPointOverMediaIsland = [](POINT pt) { return IsPointOverMediaIslandBar(pt); };
+        gCb.onMediaIslandTouchpadWheel = [](short delta) {
+            SendShellAdminCommand(WINRINGS_CMD_MEDIA_WHEEL, static_cast<LPARAM>(delta));
+        };
+        gCb.shouldProcessRawInput = []() { return ShouldAdminBridgeHandle(POINT{}, true); };
+        g_runtime.adminGestures.Initialize(g_runtime.window, g_runtime.config, std::move(gCb));
+
+        InputEngine::Callbacks iCb{};
+        iCb.isRingOpen = []() { return IsOverlayWindowVisible(); };
+        iCb.shouldProcessInput = [](POINT pt, bool isKeyboard) {
+            return ShouldAdminBridgeHandle(pt, isKeyboard);
+        };
+        iCb.shouldSuppressTouchpadMouse = [](UINT msg) {
+            return g_runtime.adminGestures.ShouldSuppressMouseButton(msg);
+        };
+        iCb.onTriggerPressed = [](int, int) {
+            SendShellAdminCommand(WINRINGS_CMD_ADMIN_TOGGLE_RING);
+        };
+        iCb.onToggleRequested = []() {
+            SendShellAdminCommand(WINRINGS_CMD_ADMIN_TOGGLE_RING);
+        };
+        iCb.onDoubleTapLastApp = []() {
+            SendShellAdminCommand(WINRINGS_CMD_DOUBLE_TAP_LAST_APP);
+        };
+        iCb.onDirectSwitchStep = []() {
+            SendShellAdminCommand(WINRINGS_CMD_DIRECT_SWITCH_STEP);
+        };
+        iCb.onDirectSwitchCommit = []() {
+            SendShellAdminCommand(WINRINGS_CMD_DIRECT_SWITCH_COMMIT);
+        };
+        iCb.onMediaIslandWheel = [](POINT pt, short delta) {
+            if (!IsPointOverMediaIslandBar(pt))
+                return false;
+            SendShellAdminCommand(WINRINGS_CMD_MEDIA_WHEEL, static_cast<LPARAM>(delta));
+            return true;
+        };
+        iCb.onShakeDetected = [](POINT pt) {
+            if (g_runtime.window)
+            {
+                g_runtime.pendingAdminShakePt = pt;
+                PostMessageW(g_runtime.window, kMsgAdminShakeTriggered, 0, 0);
+            }
+        };
+
+        const bool installed = g_runtime.adminInput.Install(g_runtime.config, std::move(iCb));
+        g_runtime.adminInput.UpdateCachedDpiScale(QueryHostPrimaryDpiScale());
+        g_runtime.adminInput.SetSuspended(!g_runtime.interactiveInput);
+        g_runtime.adminBridgeArmed = installed;
+        SetTimer(g_runtime.window, kAdminWatchdogTimer, 2000, nullptr);
+        HostDiagLog(L"AdminInputBridge armed (elevated=1 hooks=%d)", installed ? 1 : 0);
+    }
+
+    bool HandleAdminWindowActionCopyData(HWND senderHwnd, const COPYDATASTRUCT* cds) noexcept
+    {
+        if (!g_runtime.isElevated || !cds ||
+            cds->dwData != WINRINGS_COPYDATA_WINDOW_ACTION ||
+            cds->cbData != sizeof(WinRingsAdminWindowActionPayload) ||
+            !cds->lpData)
+        {
+            return false;
+        }
+
+        WinRingsAdminWindowActionPayload payload{};
+        std::memcpy(&payload, cds->lpData, sizeof(payload));
+        if (payload.cbSize != sizeof(WinRingsAdminWindowActionPayload) ||
+            !g_runtime.attemptCookie ||
+            payload.attemptCookie != g_runtime.attemptCookie ||
+            !g_runtime.explorer.processId)
+        {
+            return false;
+        }
+
+        DWORD senderPid = 0;
+        if (!senderHwnd || !IsWindow(senderHwnd) ||
+            !GetWindowThreadProcessId(senderHwnd, &senderPid) ||
+            senderPid != g_runtime.explorer.processId)
+        {
+            return false;
+        }
+
+        HWND target = reinterpret_cast<HWND>(static_cast<ULONG_PTR>(payload.targetHwnd));
+        switch (static_cast<WinRingsAdminWindowActionKind>(payload.action))
+        {
+        case WINRINGS_ADMIN_ACT_ACTIVATE:
+            if (!target || !IsWindow(target))
+                return false;
+            if (IsIconic(target))
+                ShowWindow(target, SW_RESTORE);
+            ForceForegroundElevated(target);
+            return true;
+
+        case WINRINGS_ADMIN_ACT_MINIMIZE:
+            if (!target || !IsWindow(target))
+                return false;
+            ShowWindowAsync(target, SW_MINIMIZE);
+            return true;
+
+        case WINRINGS_ADMIN_ACT_CLOSE:
+            if (!target || !IsWindow(target))
+                return false;
+            return PostMessageW(target, WM_CLOSE, 0, 0) != FALSE;
+
+        case WINRINGS_ADMIN_ACT_TERMINATE_PID:
+        {
+            if (payload.targetPid == 0 ||
+                payload.targetPid == GetCurrentProcessId() ||
+                payload.targetPid == g_runtime.explorer.processId)
+            {
+                return false;
+            }
+            HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, payload.targetPid);
+            if (!hProc)
+                return false;
+            const BOOL ok = TerminateProcess(hProc, 1);
+            CloseHandle(hProc);
+            return ok != FALSE;
+        }
+
+        case WINRINGS_ADMIN_ACT_SET_WINDOW_POS:
+            if (!target || !IsWindow(target))
+                return false;
+            return SetWindowPos(
+                target,
+                (payload.swpFlags & SWP_NOZORDER) ? nullptr : HWND_TOP,
+                payload.x, payload.y, payload.cx, payload.cy,
+                payload.swpFlags) != FALSE;
+
+        case WINRINGS_ADMIN_ACT_MAXIMIZE:
+            if (!target || !IsWindow(target))
+                return false;
+            ShowWindow(target, SW_MAXIMIZE);
+            ForceForegroundElevated(target);
+            return true;
+
+        case WINRINGS_ADMIN_ACT_RESTORE:
+            if (!target || !IsWindow(target))
+                return false;
+            return ShowWindow(target, SW_RESTORE) != FALSE;
+
+        default:
+            return false;
+        }
     }
 
     bool ReconcileInteractiveInput()
@@ -920,6 +1240,15 @@ namespace
         }
         if (!g_runtime.interactiveInput)
             g_runtime.pendingToggle = false;
+        if (g_runtime.adminBridgeArmed)
+        {
+            g_runtime.adminInput.SetSuspended(!g_runtime.interactiveInput);
+            if (g_runtime.interactiveInput)
+            {
+                g_runtime.adminInput.ResetTransientState();
+                g_runtime.adminGestures.EnsureDeviceRegistration(true);
+            }
+        }
         if (g_runtime.status == WINRINGS_HOST_STATUS_READY && g_runtime.activationCommitted)
             ReconcileInteractiveInput();
     }
@@ -1036,6 +1365,7 @@ namespace
 
     void IssueShutdownRequest(bool preserveReplacement = false)
     {
+        DisarmAdminInputBridge();
         g_runtime.status = WINRINGS_HOST_STATUS_STOPPING;
         CancelTimers();
         bool requested = false;
@@ -1109,6 +1439,7 @@ namespace
             return;
         }
         g_runtime.status = WINRINGS_HOST_STATUS_READY;
+        ArmAdminInputBridge();
         if (g_runtime.exitPending)
         {
             IssueShutdownRequest();
@@ -1472,6 +1803,9 @@ namespace
         DestroyMenu(menu);
         PostMessageW(hwnd, WM_NULL, 0, 0);
 
+        if (g_runtime.explorer.processId)
+            AllowSetForegroundWindow(g_runtime.explorer.processId);
+
         switch (cmd)
         {
         case kMenuCmdOpenRing:
@@ -1482,6 +1816,8 @@ namespace
         {
             const bool sent = (g_runtime.status == WINRINGS_HOST_STATUS_READY) &&
                 SendShellCommand(WINRINGS_CMD_TOGGLE_TOPBAR);
+            if (sent && g_runtime.adminBridgeArmed)
+                SetTimer(hwnd, kAdminConfigSyncTimer, 200, nullptr);
             HostDiagLog(L"TrayMenu ToggleTopBar: status=%d ctrl=0x%p sent=%d",
                 static_cast<int>(g_runtime.status), g_runtime.shellControlWindow, sent ? 1 : 0);
             break;
@@ -1490,6 +1826,8 @@ namespace
         {
             const bool sent = (g_runtime.status == WINRINGS_HOST_STATUS_READY) &&
                 SendShellCommand(WINRINGS_CMD_TOGGLE_MEDIA_ISLAND);
+            if (sent && g_runtime.adminBridgeArmed)
+                SetTimer(hwnd, kAdminConfigSyncTimer, 200, nullptr);
             HostDiagLog(L"TrayMenu ToggleMediaIsland: status=%d ctrl=0x%p sent=%d",
                 static_cast<int>(g_runtime.status), g_runtime.shellControlWindow, sent ? 1 : 0);
             break;
@@ -1501,6 +1839,7 @@ namespace
         {
             const bool sent = (g_runtime.status == WINRINGS_HOST_STATUS_READY) &&
                 SendShellCommand(WINRINGS_CMD_RELOAD_CONFIG);
+            ReloadAdminBridgeConfig();
             HostDiagLog(L"TrayMenu ReloadConfig: status=%d ctrl=0x%p sent=%d",
                 static_cast<int>(g_runtime.status), g_runtime.shellControlWindow, sent ? 1 : 0);
             break;
@@ -1558,12 +1897,18 @@ namespace
             case WINRINGS_HOST_CTRL_STATUS:
                 return static_cast<LRESULT>(g_runtime.status);
             case WINRINGS_HOST_CTRL_RELOAD:
-                return (g_runtime.status == WINRINGS_HOST_STATUS_READY &&
-                    SendShellCommand(WINRINGS_CMD_RELOAD_CONFIG)) ? TRUE : FALSE;
+            {
+                const bool ok = (g_runtime.status == WINRINGS_HOST_STATUS_READY &&
+                    SendShellCommand(WINRINGS_CMD_RELOAD_CONFIG));
+                ReloadAdminBridgeConfig();
+                return ok ? TRUE : FALSE;
+            }
             case WINRINGS_HOST_CTRL_TOGGLE_TOPBAR:
             {
                 const bool ok = (g_runtime.status == WINRINGS_HOST_STATUS_READY) &&
                     SendShellCommand(WINRINGS_CMD_TOGGLE_TOPBAR);
+                if (ok && g_runtime.adminBridgeArmed)
+                    SetTimer(window, kAdminConfigSyncTimer, 200, nullptr);
                 HostDiagLog(L"CLI --toggle-topbar: status=%d ctrl=0x%p sent=%d",
                     static_cast<int>(g_runtime.status), g_runtime.shellControlWindow, ok ? 1 : 0);
                 return ok ? TRUE : FALSE;
@@ -1572,6 +1917,8 @@ namespace
             {
                 const bool ok = (g_runtime.status == WINRINGS_HOST_STATUS_READY) &&
                     SendShellCommand(WINRINGS_CMD_TOGGLE_MEDIA_ISLAND);
+                if (ok && g_runtime.adminBridgeArmed)
+                    SetTimer(window, kAdminConfigSyncTimer, 200, nullptr);
                 HostDiagLog(L"CLI --toggle-media-island: status=%d ctrl=0x%p sent=%d",
                     static_cast<int>(g_runtime.status), g_runtime.shellControlWindow, ok ? 1 : 0);
                 return ok ? TRUE : FALSE;
@@ -1581,6 +1928,8 @@ namespace
                 LRESULT shellBits = 0;
                 if (g_runtime.status == WINRINGS_HOST_STATUS_READY)
                     SendShellCommand(WINRINGS_CMD_QUERY_SHELL_STATE, &shellBits);
+                if (g_runtime.adminBridgeArmed)
+                    shellBits |= WINRINGS_STATE_ADMIN_BRIDGE_ACTIVE;
                 return static_cast<LRESULT>(static_cast<DWORD>(g_runtime.status) |
                     (static_cast<DWORD>(shellBits & 0xFFFF) << 16));
             }
@@ -1618,6 +1967,40 @@ namespace
 
         switch (message)
         {
+        case kMsgAdminShakeTriggered:
+            if (g_runtime.adminBridgeArmed && !IsOverlayWindowVisible())
+            {
+                bool suppressed = false;
+                if (g_runtime.config.shakeSuppressFullscreen)
+                {
+                    QUERY_USER_NOTIFICATION_STATE quns = QUNS_ACCEPTS_NOTIFICATIONS;
+                    if (SUCCEEDED(SHQueryUserNotificationState(&quns)) &&
+                        (quns == QUNS_RUNNING_D3D_FULL_SCREEN || quns == QUNS_PRESENTATION_MODE))
+                    {
+                        suppressed = true;
+                    }
+                }
+                if (!suppressed)
+                    SendShellAdminCommand(WINRINGS_CMD_OPEN_RING_AT, PackPointLParam(g_runtime.pendingAdminShakePt));
+            }
+            return 0;
+
+        case WM_COPYDATA:
+            return HandleAdminWindowActionCopyData(
+                reinterpret_cast<HWND>(wParam),
+                reinterpret_cast<const COPYDATASTRUCT*>(lParam)) ? TRUE : FALSE;
+
+        case WM_INPUT:
+            if (g_runtime.adminBridgeArmed)
+                g_runtime.adminGestures.OnRawInput(lParam);
+            break;
+
+        case WM_DISPLAYCHANGE:
+        case WM_DPICHANGED:
+            if (g_runtime.adminBridgeArmed)
+                g_runtime.adminInput.UpdateCachedDpiScale(QueryHostPrimaryDpiScale());
+            break;
+
         case kTrayCallbackMsg:
             if (lParam == WM_LBUTTONUP || lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU)
                 ShowTrayContextMenu(window);
@@ -1682,6 +2065,21 @@ namespace
                 AddTrayIcon(window);
                 return 0;
             }
+            if (wParam == kAdminWatchdogTimer)
+            {
+                if (g_runtime.adminBridgeArmed)
+                {
+                    g_runtime.adminGestures.EnsureDeviceRegistration();
+                    g_runtime.adminInput.UpdateCachedDpiScale(QueryHostPrimaryDpiScale());
+                }
+                return 0;
+            }
+            if (wParam == kAdminConfigSyncTimer)
+            {
+                KillTimer(window, kAdminConfigSyncTimer);
+                ReloadAdminBridgeConfig();
+                return 0;
+            }
             break;
 
         case WM_CLOSE:
@@ -1705,6 +2103,7 @@ namespace
             return 0;
 
         case WM_DESTROY:
+            DisarmAdminInputBridge();
             RemoveTrayIcon(window);
             UnregisterSessionNotifications();
             PostQuitMessage(0);
@@ -1790,7 +2189,7 @@ namespace
             const auto hostStatus = static_cast<WinRingsHostStatus>(packed & 0xFFFF);
             const UINT32 bits = (packed >> 16) & 0xFFFF;
             wchar_t msg[256]{};
-            swprintf_s(msg, L"WinRingsHost: %s (ring=%d xaml=%d hook=%d backdrop=%d clock=%d appsHidden=%d media=%d)",
+            swprintf_s(msg, L"WinRingsHost: %s (ring=%d xaml=%d hook=%d backdrop=%d clock=%d appsHidden=%d media=%d admin=%d)",
                 StatusText(hostStatus),
                 (bits & WINRINGS_STATE_RING_READY) ? 1 : 0,
                 (bits & WINRINGS_STATE_XAML_ATTACHED) ? 1 : 0,
@@ -1798,7 +2197,8 @@ namespace
                 (bits & WINRINGS_STATE_BACKDROP_ACTIVE) ? 1 : 0,
                 (bits & WINRINGS_STATE_CLOCK_ACTIVE) ? 1 : 0,
                 (bits & WINRINGS_STATE_APPS_HIDDEN) ? 1 : 0,
-                (bits & WINRINGS_STATE_MEDIA_ISLAND_ACTIVE) ? 1 : 0);
+                (bits & WINRINGS_STATE_MEDIA_ISLAND_ACTIVE) ? 1 : 0,
+                (bits & WINRINGS_STATE_ADMIN_BRIDGE_ACTIVE) ? 1 : 0);
             WriteParentConsole(msg);
             return hostStatus == WINRINGS_HOST_STATUS_READY ? 0 : static_cast<int>(hostStatus);
         }
@@ -1849,6 +2249,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     }
 
     g_runtime.instance = instance;
+    g_runtime.isElevated = IsCurrentProcessElevated();
     g_runtime.hostControlMessage = RegisterWindowMessageW(WINRINGS_HOST_CONTROL_MESSAGE_W);
     g_runtime.shellStatusMessage = RegisterWindowMessageW(WINRINGS_SHELL_STATUS_MESSAGE_W);
     g_runtime.shellCommandMessage = RegisterWindowMessageW(WINRINGS_SHELL_COMMAND_MESSAGE_W);
@@ -1906,6 +2307,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     ChangeWindowMessageFilterEx(g_runtime.window, g_runtime.shellStatusMessage, MSGFLT_ALLOW, nullptr);
     ChangeWindowMessageFilterEx(g_runtime.window, g_runtime.taskbarCreatedMessage, MSGFLT_ALLOW, nullptr);
     ChangeWindowMessageFilterEx(g_runtime.window, kTrayCallbackMsg, MSGFLT_ALLOW, nullptr);
+    ChangeWindowMessageFilterEx(g_runtime.window, WM_COPYDATA, MSGFLT_ALLOW, nullptr);
+
+    HostDiagLog(L"Startup v%s elevated=%d", WINRINGS_PRODUCT_VERSION_STR_W, g_runtime.isElevated ? 1 : 0);
 
     LoadSafetyState();
     if (cmd == LaunchCommand::ResetSafety && !ResetSafetyState())
@@ -1954,6 +2358,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     }
 
     CancelTimers();
+    DisarmAdminInputBridge();
     g_runtime.explorer.clear();
     if (g_runtime.shellDll)
         FreeLibrary(g_runtime.shellDll);
@@ -1962,3 +2367,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     ReleaseMutex(instanceMutex.get());
     return result;
 }
+
+namespace winrings
+{
+    void ShellDiagLog(const wchar_t* tag, const wchar_t* fmt, ...) noexcept
+    {
+        try
+        {
+            wchar_t body[512]{};
+            va_list ap{};
+            va_start(ap, fmt);
+            _vsnwprintf_s(body, _countof(body), _TRUNCATE, fmt ? fmt : L"", ap);
+            va_end(ap);
+            HostDiagLog(L"[%s] %s", tag ? tag : L"Admin", body);
+        }
+        catch (...) {}
+    }
+} // namespace winrings

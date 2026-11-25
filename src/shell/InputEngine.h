@@ -18,6 +18,7 @@ namespace winrings
             std::function<bool()> isRingDragActive;
             std::function<bool(POINT screenPt)> isPointInOverlay;
             std::function<double()> getOverlayDpiScale;
+            std::function<bool(POINT screenPt, bool isKeyboard)> shouldProcessInput;
             std::function<void(int screenX, int screenY)> onTriggerPressed;
             std::function<void(int screenX, int screenY, bool isTap)> onTriggerReleased;
             std::function<void()> onDoubleTapLastApp;

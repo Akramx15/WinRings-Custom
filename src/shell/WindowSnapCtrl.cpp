@@ -7,6 +7,7 @@
 #include <cstring>
 #include <vector>
 
+#include "../shared/ElevationUtil.h"
 #include "ShellController.h"
 #include "SlotModel.h"
 
@@ -91,6 +92,32 @@ namespace winrings
             if (out && IsWindowVisible(hwnd))
                 out->insert(hwnd);
             return TRUE;
+        }
+
+        bool RelayedSetWindowPos(HWND target, int x, int y, int cx, int cy, UINT flags) noexcept
+        {
+            if (IsWindowElevated(target) &&
+                ShellController::RequestHostWindowAction(
+                    WINRINGS_ADMIN_ACT_SET_WINDOW_POS, target, 0, x, y, cx, cy, flags))
+            {
+                return true;
+            }
+            return SetWindowPos(
+                target,
+                (flags & SWP_NOZORDER) ? nullptr : HWND_TOP,
+                x, y, cx, cy, flags) != FALSE;
+        }
+
+        void RelayedShowWindow(HWND target, int cmd) noexcept
+        {
+            WinRingsAdminWindowActionKind act = WINRINGS_ADMIN_ACT_RESTORE;
+            if (cmd == SW_MAXIMIZE)
+                act = WINRINGS_ADMIN_ACT_MAXIMIZE;
+            else if (cmd == SW_MINIMIZE)
+                act = WINRINGS_ADMIN_ACT_MINIMIZE;
+            if (IsWindowElevated(target) && ShellController::RequestHostWindowAction(act, target))
+                return;
+            ShowWindow(target, cmd);
         }
     } // namespace
 
@@ -201,6 +228,11 @@ namespace winrings
     {
         if (!target || !IsWindow(target))
             return;
+        if (IsWindowElevated(target) &&
+            ShellController::RequestHostWindowAction(WINRINGS_ADMIN_ACT_ACTIVATE, target))
+        {
+            return;
+        }
         if (!SetForegroundWindow(target))
         {
             HWND fg = GetForegroundWindow();
@@ -228,7 +260,7 @@ namespace winrings
         WINDOWPLACEMENT wp{ sizeof(wp) };
         const bool hasWp = (GetWindowPlacement(targetHwnd, &wp) != FALSE);
         if (wasMinimizedOrMax)
-            ShowWindow(targetHwnd, SW_RESTORE);
+            RelayedShowWindow(targetHwnd, SW_RESTORE);
 
         HMONITOR hMon = MonitorFromPoint(cursorPt, MONITOR_DEFAULTTONEAREST);
         const double dpi = QueryMonitorDpiScale(hMon);
@@ -282,7 +314,7 @@ namespace winrings
             newY = (std::clamp)(newY, static_cast<int>(mi.rcWork.top),
                 (std::max)(static_cast<int>(mi.rcWork.top), static_cast<int>(mi.rcWork.bottom) - 48));
         }
-        SetWindowPos(targetHwnd, HWND_TOP, newX, newY, winW, winH, SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
+        RelayedSetWindowPos(targetHwnd, newX, newY, winW, winH, SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
         BringWindowForeground(targetHwnd);
 
         // If user already released LMB before async dispatch ran, apply snap immediately if over an edge.
@@ -540,7 +572,7 @@ namespace winrings
                 (std::max)(static_cast<int>(mi.rcWork.top), static_cast<int>(mi.rcWork.bottom) - 48));
         }
 
-        SetWindowPos(target, nullptr, newX, newY, 0, 0,
+        RelayedSetWindowPos(target, newX, newY, 0, 0,
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
     }
 
@@ -767,7 +799,7 @@ namespace winrings
             return;
 
         if (IsIconic(target) || IsZoomed(target))
-            ShowWindow(target, SW_RESTORE);
+            RelayedShowWindow(target, SW_RESTORE);
 
         HMONITOR mon = targetMon ? targetMon : MonitorFromWindow(target, MONITOR_DEFAULTTONEAREST);
         MONITORINFO mi{ sizeof(mi) };
@@ -789,10 +821,10 @@ namespace winrings
                         static_cast<int>(mi.rcWork.bottom - mi.rcWork.top));
                     const int cx = mi.rcWork.left + (static_cast<int>(mi.rcWork.right - mi.rcWork.left) - winW) / 2;
                     const int cy = mi.rcWork.top + (static_cast<int>(mi.rcWork.bottom - mi.rcWork.top) - winH) / 2;
-                    SetWindowPos(target, HWND_TOP, cx, cy, winW, winH, SWP_SHOWWINDOW);
+                    RelayedSetWindowPos(target, cx, cy, winW, winH, SWP_SHOWWINDOW);
                 }
             }
-            ShowWindow(target, SW_MAXIMIZE);
+            RelayedShowWindow(target, SW_MAXIMIZE);
             BringWindowForeground(target);
             ShellDiagLog(L"Snap", L"Applied direct Maximize hwnd=0x%p", target);
             return;
@@ -804,7 +836,7 @@ namespace winrings
             mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom,
             padL, padT, padR, padB);
 
-        const BOOL moved = SetWindowPos(target, HWND_TOP,
+        const bool moved = RelayedSetWindowPos(target,
             sr.left, sr.top, sr.right - sr.left, sr.bottom - sr.top, SWP_SHOWWINDOW);
         if (!moved)
         {
@@ -818,7 +850,7 @@ namespace winrings
             sr = ComputeDirectSnapRect(zone,
                 mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom,
                 padL, padT, padR, padB);
-            SetWindowPos(target, HWND_TOP,
+            RelayedSetWindowPos(target,
                 sr.left, sr.top, sr.right - sr.left, sr.bottom - sr.top, SWP_SHOWWINDOW);
         }
 
@@ -833,7 +865,7 @@ namespace winrings
             return;
 
         if (IsIconic(target) || IsZoomed(target))
-            ShowWindow(target, SW_RESTORE);
+            RelayedShowWindow(target, SW_RESTORE);
 
         if (targetMon)
         {
@@ -850,7 +882,7 @@ namespace winrings
                         static_cast<int>(mi.rcWork.bottom - mi.rcWork.top));
                     const int cx = mi.rcWork.left + (static_cast<int>(mi.rcWork.right - mi.rcWork.left) - winW) / 2;
                     const int cy = mi.rcWork.top + (static_cast<int>(mi.rcWork.bottom - mi.rcWork.top) - winH) / 2;
-                    SetWindowPos(target, HWND_TOP, cx, cy, winW, winH, SWP_SHOWWINDOW);
+                    RelayedSetWindowPos(target, cx, cy, winW, winH, SWP_SHOWWINDOW);
                 }
             }
         }

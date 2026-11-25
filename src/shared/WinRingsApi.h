@@ -17,15 +17,21 @@ enum WinRingsDllStatus : UINT32
 
 enum WinRingsCommand : UINT32
 {
-    WINRINGS_CMD_TOGGLE_RING        = 1,
-    WINRINGS_CMD_EXIT               = 2,
-    WINRINGS_CMD_SUSPEND_INPUT      = 3,
-    WINRINGS_CMD_REFRESH_INPUT      = 4,
-    WINRINGS_CMD_RELOAD_CONFIG      = 5,
-    WINRINGS_CMD_TOGGLE_TOPBAR      = 6,
-    WINRINGS_CMD_QUERY_SHELL_STATE  = 7,
+    WINRINGS_CMD_TOGGLE_RING         = 1,
+    WINRINGS_CMD_EXIT                = 2,
+    WINRINGS_CMD_SUSPEND_INPUT       = 3,
+    WINRINGS_CMD_REFRESH_INPUT       = 4,
+    WINRINGS_CMD_RELOAD_CONFIG       = 5,
+    WINRINGS_CMD_TOGGLE_TOPBAR       = 6,
+    WINRINGS_CMD_QUERY_SHELL_STATE   = 7,
     WINRINGS_CMD_TOGGLE_MEDIA_ISLAND = 8,
-    WINRINGS_CMD_REATTACH           = 0xFFFF,
+    WINRINGS_CMD_OPEN_RING_AT        = 9,
+    WINRINGS_CMD_DIRECT_SWITCH_STEP  = 10,
+    WINRINGS_CMD_DIRECT_SWITCH_COMMIT = 11,
+    WINRINGS_CMD_DOUBLE_TAP_LAST_APP = 12,
+    WINRINGS_CMD_MEDIA_WHEEL         = 13,
+    WINRINGS_CMD_ADMIN_TOGGLE_RING   = 14,
+    WINRINGS_CMD_REATTACH            = 0xFFFF,
 };
 
 // Bitmask returned by WINRINGS_CMD_QUERY_SHELL_STATE
@@ -38,6 +44,34 @@ enum WinRingsShellStateBits : UINT32
     WINRINGS_STATE_CLOCK_ACTIVE         = 1u << 4,
     WINRINGS_STATE_APPS_HIDDEN          = 1u << 5,
     WINRINGS_STATE_MEDIA_ISLAND_ACTIVE  = 1u << 6,
+    WINRINGS_STATE_ADMIN_BRIDGE_ACTIVE  = 1u << 7,
+};
+
+#define WINRINGS_COPYDATA_WINDOW_ACTION ((ULONG_PTR)0x57524143u)
+
+enum WinRingsAdminWindowActionKind : UINT32
+{
+    WINRINGS_ADMIN_ACT_ACTIVATE       = 1,
+    WINRINGS_ADMIN_ACT_MINIMIZE       = 2,
+    WINRINGS_ADMIN_ACT_CLOSE          = 3,
+    WINRINGS_ADMIN_ACT_TERMINATE_PID  = 4,
+    WINRINGS_ADMIN_ACT_SET_WINDOW_POS = 5,
+    WINRINGS_ADMIN_ACT_MAXIMIZE       = 6,
+    WINRINGS_ADMIN_ACT_RESTORE        = 7,
+};
+
+struct WinRingsAdminWindowActionPayload
+{
+    UINT32 cbSize;
+    UINT32 action;
+    UINT64 attemptCookie;
+    UINT64 targetHwnd;
+    UINT32 targetPid;
+    UINT32 swpFlags;
+    INT32 x;
+    INT32 y;
+    INT32 cx;
+    INT32 cy;
 };
 
 enum WinRingsHostControl : UINT32

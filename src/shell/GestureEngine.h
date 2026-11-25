@@ -19,6 +19,7 @@ namespace winrings
             std::function<void()> onOpenRing;
             std::function<bool(POINT screenPt)> isPointOverMediaIsland;
             std::function<void(short wheelDelta)> onMediaIslandTouchpadWheel;
+            std::function<bool()> shouldProcessRawInput;
         };
 
         GestureEngine() = default;

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <unordered_set>
 
+#include "../shared/ElevationUtil.h"
 #include "../shared/SearchMatch.h"
 #include "../shared/WinRingsIdentity.h"
 #include "AppIndex.h"
@@ -938,6 +939,8 @@ namespace winrings
             }
         }
 
+        const bool prevFgElevated = IsWindowElevated(GetForegroundWindow());
+
         Render();
         const bool showWca = (m_wcaBackdropHwnd && m_wcaBackdropActive && !m_config.disableRingBlur);
         if (showWca)
@@ -952,6 +955,8 @@ namespace winrings
         ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
         if (showWca)
             SetWindowPos(m_wcaBackdropHwnd, m_hwnd, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if (prevFgElevated)
+            SetForegroundWindow(m_hwnd);
     }
 
     void RingOverlay::HandleEscapeKey()

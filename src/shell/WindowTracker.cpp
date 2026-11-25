@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <cwctype>
 
+#include "../shared/ElevationUtil.h"
 #include "../shared/RadialMath.h"
 #include "../shared/WinRingsIdentity.h"
+#include "ShellController.h"
 
 namespace winrings
 {
@@ -93,7 +95,12 @@ namespace winrings
             const int newH = (std::min)(winH, workH);
             const int newX = mi.rcWork.left + (workW - newW) / 2;
             const int newY = mi.rcWork.top + (workH - newH) / 2;
-            SetWindowPos(hWnd, nullptr, newX, newY, newW, newH, SWP_NOZORDER | SWP_SHOWWINDOW);
+            if (!IsWindowElevated(hWnd) ||
+                !ShellController::RequestHostWindowAction(
+                    WINRINGS_ADMIN_ACT_SET_WINDOW_POS, hWnd, 0, newX, newY, newW, newH, SWP_NOZORDER | SWP_SHOWWINDOW))
+            {
+                SetWindowPos(hWnd, nullptr, newX, newY, newW, newH, SWP_NOZORDER | SWP_SHOWWINDOW);
+            }
         }
 
         bool IsIgnoredShellClass(const wchar_t* cls) noexcept
@@ -557,13 +564,19 @@ namespace winrings
         if (!target || !IsWindow(target))
             return;
 
+        const bool elevated = IsWindowElevated(target);
         if (IsIconic(target))
-            ShowWindow(target, SW_RESTORE);
+        {
+            if (!elevated || !ShellController::RequestHostWindowAction(WINRINGS_ADMIN_ACT_RESTORE, target))
+                ShowWindow(target, SW_RESTORE);
+        }
 
         if (centerOnActiveMonitor)
             CenterWindowOnCursorMonitor(target);
 
-        if (!SetForegroundWindow(target))
+        const bool relayed = elevated &&
+            ShellController::RequestHostWindowAction(WINRINGS_ADMIN_ACT_ACTIVATE, target);
+        if (!relayed && !SetForegroundWindow(target))
         {
             HWND fg = GetForegroundWindow();
             const DWORD curTid = GetCurrentThreadId();
@@ -605,21 +618,27 @@ namespace winrings
         if (!target || !IsWindow(target))
             return;
 
-        if (IsIconic(target))
-            ShowWindowAsync(target, SW_RESTORE);
-
-        if (!SetForegroundWindow(target))
+        const bool elevated = IsWindowElevated(target);
+        const bool relayed = elevated &&
+            ShellController::RequestHostWindowAction(WINRINGS_ADMIN_ACT_ACTIVATE, target);
+        if (!relayed)
         {
-            HWND fg = GetForegroundWindow();
-            const DWORD curTid = GetCurrentThreadId();
-            const DWORD fgTid = fg ? GetWindowThreadProcessId(fg, nullptr) : 0;
-            const DWORD tgtTid = GetWindowThreadProcessId(target, nullptr);
-            const bool attFg = fgTid && fgTid != curTid && AttachThreadInput(curTid, fgTid, TRUE) != FALSE;
-            const bool attTgt = tgtTid && tgtTid != curTid && tgtTid != fgTid && AttachThreadInput(curTid, tgtTid, TRUE) != FALSE;
-            BringWindowToTop(target);
-            SetForegroundWindow(target);
-            if (attTgt) AttachThreadInput(curTid, tgtTid, FALSE);
-            if (attFg) AttachThreadInput(curTid, fgTid, FALSE);
+            if (IsIconic(target))
+                ShowWindowAsync(target, SW_RESTORE);
+
+            if (!SetForegroundWindow(target))
+            {
+                HWND fg = GetForegroundWindow();
+                const DWORD curTid = GetCurrentThreadId();
+                const DWORD fgTid = fg ? GetWindowThreadProcessId(fg, nullptr) : 0;
+                const DWORD tgtTid = GetWindowThreadProcessId(target, nullptr);
+                const bool attFg = fgTid && fgTid != curTid && AttachThreadInput(curTid, fgTid, TRUE) != FALSE;
+                const bool attTgt = tgtTid && tgtTid != curTid && tgtTid != fgTid && AttachThreadInput(curTid, tgtTid, TRUE) != FALSE;
+                BringWindowToTop(target);
+                SetForegroundWindow(target);
+                if (attTgt) AttachThreadInput(curTid, tgtTid, FALSE);
+                if (attFg) AttachThreadInput(curTid, fgTid, FALSE);
+            }
         }
 
         if (commitToMru)
@@ -664,14 +683,20 @@ namespace winrings
 
     void WindowTracker::MinimizeWindow(HWND hwnd) noexcept
     {
-        if (hwnd && IsWindow(hwnd))
-            ShowWindow(hwnd, SW_MINIMIZE);
+        if (!hwnd || !IsWindow(hwnd))
+            return;
+        if (IsWindowElevated(hwnd) && ShellController::RequestHostWindowAction(WINRINGS_ADMIN_ACT_MINIMIZE, hwnd))
+            return;
+        ShowWindow(hwnd, SW_MINIMIZE);
     }
 
     void WindowTracker::CloseWindow(HWND hwnd) noexcept
     {
-        if (hwnd && IsWindow(hwnd))
-            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        if (!hwnd || !IsWindow(hwnd))
+            return;
+        if (IsWindowElevated(hwnd) && ShellController::RequestHostWindowAction(WINRINGS_ADMIN_ACT_CLOSE, hwnd))
+            return;
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
     }
 
     void WindowTracker::TerminateProcessByPid(DWORD pid) noexcept
@@ -683,6 +708,8 @@ namespace winrings
         {
             TerminateProcess(hProc, 1);
             CloseHandle(hProc);
+            return;
         }
+        ShellController::RequestHostWindowAction(WINRINGS_ADMIN_ACT_TERMINATE_PID, nullptr, pid);
     }
 } // namespace winrings

@@ -82,7 +82,7 @@ $bat3 = @"
 @echo off
 call "$vcvars" >nul || exit /b 1
 rc /nologo /fo "$root\build\obj\host\WinRingsHost.res" "$root\src\host\WinRingsHost.rc" || exit /b 1
-cl $cflags /Fo"$root\build\obj\host\\" "$root\src\shared\WinRingsConfig.cpp" "$root\src\host\WinRingsHost.cpp" /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:"$root\src\host\WinRingsHost.manifest" $lflags /OUT:"$root\build\bin\WinRingsHost.exe" "$root\build\obj\host\WinRingsHost.res" user32.lib shell32.lib advapi32.lib wtsapi32.lib bcrypt.lib shlwapi.lib ole32.lib || exit /b 1
+cl $cflags /Fo"$root\build\obj\host\\" "$root\src\shared\WinRingsConfig.cpp" "$root\src\shell\InputEngine.cpp" "$root\src\shell\GestureEngine.cpp" "$root\src\host\WinRingsHost.cpp" /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:"$root\src\host\WinRingsHost.manifest" $lflags /OUT:"$root\build\bin\WinRingsHost.exe" "$root\build\obj\host\WinRingsHost.res" user32.lib shell32.lib advapi32.lib wtsapi32.lib bcrypt.lib shlwapi.lib ole32.lib hid.lib || exit /b 1
 "@
 Invoke-VcBat $bat3 'host'
 

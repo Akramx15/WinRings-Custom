@@ -1,4 +1,4 @@
-# WinRings-Custom Features (`v3.0.5.0`)
+# WinRings-Custom Features (`v3.0.6.0`)
 
 `WinRings-Custom` combines **upstream `WinRings v3.0.0`** (`WCA` native acrylic + 3D beveled glass edges, `m_outsideClickPending` click-vs-drag guard, `isRingDragActive` reorder guard, `explorer.exe` folder icon fix, slim core binary) with Akram's unified Windows 11 desktop enhancements:
 
@@ -56,3 +56,11 @@
 - **Ring, Window Card & Search Arc Context Actions:** Right-click main slots/windows for **Run as Administrator**, **Close Window**, **End Task** (`TerminateProcessByPid`), **Toggle Top Minimal Bar**, and **Show Media Island**; right-clicking any result in the top **Search Arc** (`m_searchArcActive`) preserves the arc while offering **`Open`**, **`Run as Administrator`**, **`Open File Location`** (resolving `.lnk` shortcuts and UWP `shell:AppsFolder` targets), and **`Pin to Ring` / `Unpin from Ring`** (smart `.lnk`-to-`.exe` resolution + duplicate pin detection).
 - **Selection Indicator Styles (`selectionIndicator`):** `GlowOnly`, `SectorWedge` (restored classic v1 blue wedge accent), or `PointerLine`.
 - **Ultra-Fast No-Blur Mode (`disableRingBlur`):** Fully disables native `WCA` backdrop (`SW_HIDE`), `Windows::UI::Composition` blur, and synthetic grain noise (`useNoise = false`) for solid high-contrast rendering and minimal GPU work.
+
+---
+
+## 6. Full Administrator Window Support (`ElevationUtil.h` + `WinRingsHost` Admin Bridge)
+
+- **Zero-UAC Elevated Host Task (`WinRings_Host_Elevated`):** `Deploy-WinRings.ps1` registers an interactive Scheduled Task (`RunLevel = Highest`) so resident `WinRingsHost.exe` starts elevated automatically on logon without UAC prompts, while `WinRingsHost.manifest` stays `asInvoker` for fast CLI commands and `explorer.exe` remains strictly Medium-IL.
+- **Selective Admin Input Bridge:** While an elevated window holds focus (or lies under the cursor for mouse input) and the Ring overlay is closed, elevated `WinRingsHost.exe` captures global `WH_MOUSE_LL`, `WH_KEYBOARD_LL`, `RAWMOUSE` hot-corner, and `ELAN06FA` touchpad HID events via `InputEngine` + `GestureEngine` and signals `explorer.exe` (`AllowSetForegroundWindow`), letting `RingOverlay::OpenAt` claim focus cleanly so typing/clicking inside the Ring works seamlessly.
+- **Cross-IL Window Action Relay (`WINRINGS_COPYDATA_WINDOW_ACTION`):** When activating, minimizing, closing (`X` button / menu), terminating (`End Task`), or live-dragging/snapping (`WindowSnapCtrl`) an elevated window from Medium-IL `explorer.exe`, `ShellController::RequestHostWindowAction` relays an authenticated `WM_COPYDATA` request (verified by session `attemptCookie` and Explorer PID) to elevated `WinRingsHost.exe`.

@@ -340,6 +340,13 @@ namespace winrings
         if (!m_config.hotCornerEnabled || (mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0)
             return;
 
+        if (m_callbacks.shouldProcessRawInput && !m_callbacks.shouldProcessRawInput())
+        {
+            m_cornerPressure = 0;
+            m_cornerArmed = true;
+            return;
+        }
+
         const LONG dx = mouse.lLastX;
         const LONG dy = mouse.lLastY;
         if (dx == 0 && dy == 0)
@@ -521,6 +528,13 @@ namespace winrings
         const bool wantMediaScroll = m_config.mediaIslandEnabled && m_config.mediaIslandScrollVolume;
         if (!m_config.touchpadPhysLeftClickTrigger && !m_config.touchpadCornerTrigger && !wantMediaScroll)
             return;
+
+        if (m_callbacks.shouldProcessRawInput && !m_callbacks.shouldProcessRawInput())
+        {
+            m_tpState = {};
+            m_physBtnDownNow = false;
+            return;
+        }
 
         const TouchpadCaps& caps = GetOrInspectTouchpad(hDevice);
         if (!caps.valid || caps.preparsed.empty() || hid.dwSizeHid == 0 || hid.dwCount == 0)

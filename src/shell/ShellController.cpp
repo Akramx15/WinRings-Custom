@@ -3,6 +3,7 @@
 #include <ole2.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <windowsx.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdarg>
@@ -14,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "../shared/ElevationUtil.h"
 #include "../shared/WinRingsApi.h"
 #include "../shared/WinRingsConfig.h"
 #include "../shared/WinRingsIdentity.h"
@@ -99,51 +101,9 @@ namespace winrings
         constexpr UINT kMsgPowerOrDisplayResume = WM_APP + 304;
         constexpr wchar_t kPreviewControlClassW[] = L"WinRings.Preview.Control.v1";
 
-        bool IsWindowProcessElevated(HWND hwnd) noexcept
-        {
-            if (!hwnd || !IsWindow(hwnd))
-                return false;
-
-            DWORD pid = 0;
-            GetWindowThreadProcessId(hwnd, &pid);
-            if (pid == 0 || pid == GetCurrentProcessId())
-                return false;
-
-            HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-            if (!hProc)
-                return GetLastError() == ERROR_ACCESS_DENIED;
-
-            bool elevated = false;
-            HANDLE hToken = nullptr;
-            if (OpenProcessToken(hProc, TOKEN_QUERY, &hToken) && hToken)
-            {
-                TOKEN_ELEVATION elev{};
-                DWORD retLen = 0;
-                if (GetTokenInformation(hToken, TokenElevation, &elev, sizeof(elev), &retLen))
-                    elevated = (elev.TokenIsElevated != 0);
-                CloseHandle(hToken);
-            }
-            else if (GetLastError() == ERROR_ACCESS_DENIED)
-            {
-                elevated = true;
-            }
-            CloseHandle(hProc);
-            return elevated;
-        }
-
-        bool IsElevatedOrSecureDesktopBlockingHooks(POINT cursorPt) noexcept
-        {
-            HDESK hInput = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
-            if (!hInput)
-                return true;
-            CloseDesktop(hInput);
-
-            if (IsWindowProcessElevated(GetForegroundWindow()))
-                return true;
-            if (IsWindowProcessElevated(WindowFromPoint(cursorPt)))
-                return true;
-            return false;
-        }
+        std::atomic<HWND> g_activeHostWindow{ nullptr };
+        std::atomic<HWND> g_activeControlWindow{ nullptr };
+        std::atomic<UINT_PTR> g_activeAttemptCookie{ 0 };
 
         double QueryPrimaryDpiScale() noexcept
         {
@@ -346,6 +306,42 @@ namespace winrings
                             ToggleStickyRing();
                         return TRUE;
 
+                    case WINRINGS_CMD_ADMIN_TOGGLE_RING:
+                        if (m_armed && (GetTickCount64() - m_lastRingToggleTick) >= 200ull)
+                            ToggleStickyRing();
+                        return TRUE;
+
+                    case WINRINGS_CMD_OPEN_RING_AT:
+                        if (m_armed && !m_overlay.IsOpen())
+                        {
+                            POINT openPt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+                            const bool shiftHeld = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+                            if (shiftHeld && m_config.shiftCenterOnActiveMonitor)
+                                openPt = GetActiveMonitorCenterPhysical();
+                            OpenRingAt(openPt.x, openPt.y, true);
+                        }
+                        return TRUE;
+
+                    case WINRINGS_CMD_DIRECT_SWITCH_STEP:
+                        if (m_armed)
+                            StepDirectSwitch();
+                        return TRUE;
+
+                    case WINRINGS_CMD_DIRECT_SWITCH_COMMIT:
+                        if (m_armed)
+                            CommitDirectSwitch();
+                        return TRUE;
+
+                    case WINRINGS_CMD_DOUBLE_TAP_LAST_APP:
+                        if (m_armed)
+                            SwitchToLastApp();
+                        return TRUE;
+
+                    case WINRINGS_CMD_MEDIA_WHEEL:
+                        if (m_armed && !m_previewMode)
+                            m_mediaIsland.PostExternalWheel(static_cast<short>(lp));
+                        return TRUE;
+
                     case WINRINGS_CMD_EXIT:
                         Disarm(true, true);
                         return TRUE;
@@ -427,7 +423,7 @@ namespace winrings
                                     {
                                         if (hookTick == m_watchdogLastMouseHookTick)
                                         {
-                                            if (IsElevatedOrSecureDesktopBlockingHooks(cur))
+                                            if (IsElevatedOrSecureDesktopBlockingMediumHooks(cur))
                                             {
                                                 m_watchdogMouseStallTicks = 0;
                                             }
@@ -564,6 +560,9 @@ namespace winrings
 
             void CleanupHostHandle() noexcept
             {
+                g_activeHostWindow.store(nullptr, std::memory_order_release);
+                g_activeControlWindow.store(nullptr, std::memory_order_release);
+                g_activeAttemptCookie.store(0, std::memory_order_release);
                 if (m_hostProcess)
                 {
                     CloseHandle(m_hostProcess);
@@ -595,6 +594,9 @@ namespace winrings
                     if (hostPid)
                         m_hostProcess = OpenProcess(SYNCHRONIZE, FALSE, hostPid);
                 }
+                g_activeHostWindow.store(m_hostWindow, std::memory_order_release);
+                g_activeControlWindow.store(m_controlHwnd, std::memory_order_release);
+                g_activeAttemptCookie.store(m_attemptCookie, std::memory_order_release);
             }
 
             void PostStatusToHost(WinRingsDllStatus status) noexcept
@@ -710,18 +712,7 @@ namespace winrings
                     }
                 };
                 inputCb.onDoubleTapLastApp = [this]() {
-                    if (m_overlay.IsOpen())
-                        m_overlay.Dismiss();
-                    HWND prev = m_tracker.PreviousActiveWindow();
-                    if (!prev || !IsWindow(prev))
-                        prev = m_tracker.LastActiveWindow();
-                    if (prev && IsWindow(prev))
-                    {
-                        const bool shiftHeld = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-                        m_tracker.ActivateWindow(prev,
-                            shiftHeld && m_config.shiftCenterOnActiveMonitor,
-                            m_config.pointerFollow);
-                    }
+                    SwitchToLastApp();
                 };
                 inputCb.onMouseMoved = [this](int x, int y) {
                     if (m_overlay.IsOpen())
@@ -757,33 +748,10 @@ namespace winrings
                 inputCb.onUserPointerDelta = [this]() {
                 };
                 inputCb.onDirectSwitchStep = [this]() {
-                    if (m_directSwitchList.empty())
-                    {
-                        m_tracker.SetMruFrozen(true);
-                        m_directSwitchList = m_tracker.GetEligibleMruWindows(m_overlay.Hwnd());
-                        if (m_directSwitchList.empty())
-                        {
-                            m_tracker.SetMruFrozen(false);
-                            return;
-                        }
-                        m_directSwitchIndex = (m_directSwitchList.size() > 1) ? 1u : 0u;
-                    }
-                    else
-                    {
-                        m_directSwitchIndex = (m_directSwitchIndex + 1u) % m_directSwitchList.size();
-                    }
-                    m_tracker.ActivateWindowDirect(m_directSwitchList[m_directSwitchIndex], false);
+                    StepDirectSwitch();
                 };
                 inputCb.onDirectSwitchCommit = [this]() {
-                    m_tracker.SetMruFrozen(false);
-                    if (!m_directSwitchList.empty() && m_directSwitchIndex < m_directSwitchList.size())
-                    {
-                        if (m_directSwitchList.size() > 1 && m_directSwitchIndex != 0)
-                            m_tracker.OnWinEventForeground(m_directSwitchList[0]);
-                        m_tracker.OnWinEventForeground(m_directSwitchList[m_directSwitchIndex]);
-                    }
-                    m_directSwitchList.clear();
-                    m_directSwitchIndex = 0;
+                    CommitDirectSwitch();
                 };
                 inputCb.shouldSuppressTouchpadMouse = [this](UINT mouseMsg) {
                     return !m_previewMode && m_gestures.ShouldSuppressMouseButton(mouseMsg);
@@ -965,6 +933,10 @@ namespace winrings
 
                 if (notifyHost && !m_previewMode)
                     PostStatusToHost(WINRINGS_DLL_STATUS_DISARMED);
+
+                g_activeHostWindow.store(nullptr, std::memory_order_release);
+                g_activeControlWindow.store(nullptr, std::memory_order_release);
+                g_activeAttemptCookie.store(0, std::memory_order_release);
             }
 
             void HandleReattach(HWND newHostWindow)
@@ -976,6 +948,7 @@ namespace winrings
 
             void OpenRingAt(int x, int y, bool lockOpen)
             {
+                m_lastRingToggleTick = GetTickCount64();
                 m_tracker.RecordForegroundBeforeOpen(m_overlay.Hwnd());
                 m_appIndex.EnsureFreshAsync();
                 auto slots = SlotModel::BuildRingSlots(
@@ -985,6 +958,7 @@ namespace winrings
 
             void ToggleStickyRing()
             {
+                m_lastRingToggleTick = GetTickCount64();
                 if (m_overlay.IsOpen())
                 {
                     m_overlay.Dismiss();
@@ -996,6 +970,55 @@ namespace winrings
                 if (shiftHeld && m_config.shiftCenterOnActiveMonitor)
                     pt = GetActiveMonitorCenterPhysical();
                 OpenRingAt(pt.x, pt.y, true);
+            }
+
+            void SwitchToLastApp()
+            {
+                if (m_overlay.IsOpen())
+                    m_overlay.Dismiss();
+                HWND prev = m_tracker.PreviousActiveWindow();
+                if (!prev || !IsWindow(prev))
+                    prev = m_tracker.LastActiveWindow();
+                if (prev && IsWindow(prev))
+                {
+                    const bool shiftHeld = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+                    m_tracker.ActivateWindow(prev,
+                        shiftHeld && m_config.shiftCenterOnActiveMonitor,
+                        m_config.pointerFollow);
+                }
+            }
+
+            void StepDirectSwitch()
+            {
+                if (m_directSwitchList.empty())
+                {
+                    m_tracker.SetMruFrozen(true);
+                    m_directSwitchList = m_tracker.GetEligibleMruWindows(m_overlay.Hwnd());
+                    if (m_directSwitchList.empty())
+                    {
+                        m_tracker.SetMruFrozen(false);
+                        return;
+                    }
+                    m_directSwitchIndex = (m_directSwitchList.size() > 1) ? 1u : 0u;
+                }
+                else
+                {
+                    m_directSwitchIndex = (m_directSwitchIndex + 1u) % m_directSwitchList.size();
+                }
+                m_tracker.ActivateWindowDirect(m_directSwitchList[m_directSwitchIndex], false);
+            }
+
+            void CommitDirectSwitch()
+            {
+                m_tracker.SetMruFrozen(false);
+                if (!m_directSwitchList.empty() && m_directSwitchIndex < m_directSwitchList.size())
+                {
+                    if (m_directSwitchList.size() > 1 && m_directSwitchIndex != 0)
+                        m_tracker.OnWinEventForeground(m_directSwitchList[0]);
+                    m_tracker.OnWinEventForeground(m_directSwitchList[m_directSwitchIndex]);
+                }
+                m_directSwitchList.clear();
+                m_directSwitchIndex = 0;
             }
 
             void ReloadConfiguration()
@@ -1198,6 +1221,7 @@ namespace winrings
             bool m_watchdogHasCursorPt = false;
             ULONGLONG m_watchdogLastMouseHookTick = 0;
             ULONGLONG m_lastWatchdogReinstallTick = 0;
+            ULONGLONG m_lastRingToggleTick = 0;
             int m_watchdogMouseStallTicks = 0;
             int m_wakeFollowUpRemaining = 0;
             PendingClosedSnap m_pendingClosedSnap;
@@ -1250,5 +1274,49 @@ namespace winrings
         if (!cmdMsg)
             return false;
         return PostMessageW(controlWindow, cmdMsg, WINRINGS_CMD_EXIT, 0) != FALSE;
+    }
+
+    bool ShellController::RequestHostWindowAction(
+        WinRingsAdminWindowActionKind action,
+        HWND targetHwnd,
+        DWORD targetPid,
+        int x,
+        int y,
+        int cx,
+        int cy,
+        UINT swpFlags) noexcept
+    {
+        HWND hostWnd = g_activeHostWindow.load(std::memory_order_acquire);
+        HWND ctrlWnd = g_activeControlWindow.load(std::memory_order_acquire);
+        const UINT_PTR cookie = g_activeAttemptCookie.load(std::memory_order_acquire);
+        if (!hostWnd || !IsWindow(hostWnd) || !ctrlWnd || !IsWindow(ctrlWnd) || !cookie)
+            return false;
+
+        WinRingsAdminWindowActionPayload payload{};
+        payload.cbSize = sizeof(payload);
+        payload.action = static_cast<UINT32>(action);
+        payload.attemptCookie = static_cast<UINT64>(cookie);
+        payload.targetHwnd = static_cast<UINT64>(reinterpret_cast<ULONG_PTR>(targetHwnd));
+        payload.targetPid = static_cast<UINT32>(targetPid);
+        payload.swpFlags = static_cast<UINT32>(swpFlags);
+        payload.x = x;
+        payload.y = y;
+        payload.cx = cx;
+        payload.cy = cy;
+
+        COPYDATASTRUCT cds{};
+        cds.dwData = WINRINGS_COPYDATA_WINDOW_ACTION;
+        cds.cbData = sizeof(payload);
+        cds.lpData = &payload;
+
+        DWORD_PTR res = 0;
+        const LRESULT sent = SendMessageTimeoutW(
+            hostWnd, WM_COPYDATA,
+            reinterpret_cast<WPARAM>(ctrlWnd),
+            reinterpret_cast<LPARAM>(&cds),
+            SMTO_ABORTIFHUNG | SMTO_BLOCK,
+            120,
+            &res);
+        return sent != 0 && res != 0;
     }
 } // namespace winrings
